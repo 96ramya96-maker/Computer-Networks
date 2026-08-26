@@ -1,0 +1,315 @@
+#include <stdio.h>
+
+#define MAX 10
+#define INF 9999
+struct RoutingTable
+{
+    int cost[MAX];
+    int nextHop[MAX];
+};
+int routers;
+
+int costMatrix[MAX][MAX];
+
+struct RoutingTable table[MAX];
+void getInput();
+
+void initializeRoutingTable();
+
+void displayCostMatrix();
+
+void displayInitialTables();
+void runDistanceVector();
+
+
+
+void displayFinalTables();
+void displayNeighbours();
+void sendRoutingTables();
+void displayRoutingTables();
+int main()
+{
+    getInput();
+
+    displayCostMatrix();
+
+    initializeRoutingTable();
+
+    displayInitialTables();
+
+    displayNeighbours();
+
+    runDistanceVector();
+
+    displayFinalTables();
+
+    return 0;
+}
+void getInput()
+{
+    int i;
+    int j;
+
+    printf("Enter Number of Routers : ");
+    scanf("%d",&routers);
+
+    printf("\nEnter Cost Matrix\n");
+    printf("(Enter 9999 if routers are not directly connected)\n\n");
+
+    for(i=0;i<routers;i++)
+    {
+        for(j=0;j<routers;j++)
+        {
+            scanf("%d",&costMatrix[i][j]);
+        }
+    }
+}
+void displayCostMatrix()
+{
+    int i;
+    int j;
+
+    printf("\n==============================\n");
+    printf("        COST MATRIX\n");
+    printf("==============================\n\n");
+
+    for(i=0;i<routers;i++)
+    {
+        for(j=0;j<routers;j++)
+        {
+            if(costMatrix[i][j]==INF)
+                printf("INF\t");
+            else
+                printf("%d\t",costMatrix[i][j]);
+        }
+
+        printf("\n");
+    }
+}
+void initializeRoutingTable()
+{
+    int i;
+    int j;
+
+    for(i=0;i<routers;i++)
+    {
+        for(j=0;j<routers;j++)
+        {
+            table[i].cost[j]=costMatrix[i][j];
+
+            if(i==j)
+            {
+                table[i].nextHop[j]=i;
+            }
+            else if(costMatrix[i][j]!=INF)
+            {
+                table[i].nextHop[j]=j;
+            }
+            else
+            {
+                table[i].nextHop[j]=-1;
+            }
+        }
+    }
+}
+void displayInitialTables()
+{
+    int i;
+    int j;
+
+    printf("\n==========================================");
+    printf("\n        INITIAL ROUTING TABLES");
+    printf("\n==========================================\n");
+
+    for(i=0;i<routers;i++)
+    {
+        printf("\nRouter %c\n",'A'+i);
+
+        printf("--------------------------------------\n");
+        printf("Destination\tNext Hop\tCost\n");
+
+        for(j=0;j<routers;j++)
+        {
+            printf("%c\t\t",'A'+j);
+
+            if(table[i].nextHop[j]==-1)
+                printf("-\t\t");
+            else
+                printf("%c\t\t",'A'+table[i].nextHop[j]);
+
+            if(table[i].cost[j]==INF)
+                printf("INF\n");
+            else
+                printf("%d\n",table[i].cost[j]);
+        }
+
+        printf("--------------------------------------\n");
+    }
+}
+void displayNeighbours()
+{
+    int i;
+    int j;
+
+    printf("\n==========================================");
+    printf("\n       DIRECT NEIGHBOURS");
+    printf("\n==========================================\n");
+
+    for(i=0;i<routers;i++)
+    {
+        printf("\nRouter %c : ",'A'+i);
+
+        for(j=0;j<routers;j++)
+        {
+            if(i!=j && costMatrix[i][j]!=INF)
+            {
+                printf("%c ",'A'+j);
+            }
+        }
+
+        printf("\n");
+    }
+}
+void sendRoutingTables()
+{
+    int i;
+    int j;
+
+    printf("\n==========================================");
+    printf("\n      SENDING ROUTING TABLES");
+    printf("\n==========================================\n");
+
+    for(i=0;i<routers;i++)
+    {
+        for(j=0;j<routers;j++)
+        {
+            if(i!=j && costMatrix[i][j]!=INF)
+            {
+                printf("\nRouter %c sends Routing Table to Router %c",
+                       'A'+i,'A'+j);
+            }
+        }
+    }
+
+    printf("\n");
+}
+void runDistanceVector()
+{
+    int i, j, k;
+    int iteration = 1;
+    int updated;
+
+    do
+    {
+        updated = 0;
+
+        printf("\n==========================================");
+        printf("\n          ITERATION %d", iteration);
+        printf("\n==========================================\n");
+
+        sendRoutingTables();
+
+        printf("\n------------------------------------------");
+        printf("\nReceiving Routing Tables");
+        printf("\n------------------------------------------\n");
+
+        for(i = 0; i < routers; i++)
+        {
+            for(k = 0; k < routers; k++)
+            {
+                if(i != k && costMatrix[i][k] != INF)
+                {
+                    printf("\nRouter %c receives Routing Table from Router %c\n",
+                           'A'+i,'A'+k);
+
+                    for(j = 0; j < routers; j++)
+                    {
+                        if(table[k].cost[j] == INF)
+                            continue;
+
+                        int newCost = costMatrix[i][k] + table[k].cost[j];
+
+                        if(newCost < table[i].cost[j])
+                        {
+                            printf("\nUpdating Router %c\n",'A'+i);
+
+                            printf("Destination : %c\n",'A'+j);
+
+                            if(table[i].cost[j] == INF)
+                                printf("Old Cost : INF\n");
+                            else
+                                printf("Old Cost : %d\n",table[i].cost[j]);
+
+                            printf("New Cost : %d\n",newCost);
+
+                            printf("Next Hop : %c\n",'A'+k);
+
+                            printf("Route Updated Successfully.\n");
+
+                            table[i].cost[j] = newCost;
+                            table[i].nextHop[j] = k;
+
+                            updated = 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        printf("\n==========================================");
+        printf("\nRouting Tables After Iteration %d", iteration);
+        printf("\n==========================================\n");
+
+        displayRoutingTables();
+
+        iteration++;
+
+    }while(updated);
+
+    printf("\n==========================================");
+    printf("\nRouting Tables Converged.");
+    printf("\nNo Further Updates Required.");
+    printf("\n==========================================\n");
+}
+void displayRoutingTables()
+{
+    int i;
+    int j;
+
+    for(i=0;i<routers;i++)
+    {
+        printf("\nRouter %c\n",'A'+i);
+
+        printf("--------------------------------------\n");
+        printf("Destination\tNext Hop\tCost\n");
+
+        for(j=0;j<routers;j++)
+        {
+            printf("%c\t\t",'A'+j);
+
+            if(table[i].nextHop[j]==-1)
+                printf("-\t\t");
+            else
+                printf("%c\t\t",'A'+table[i].nextHop[j]);
+
+            if(table[i].cost[j]==INF)
+                printf("INF\n");
+            else
+                printf("%d\n",table[i].cost[j]);
+        }
+
+        printf("--------------------------------------\n");
+    }
+}
+void displayFinalTables()
+{
+    printf("\n\n==========================================");
+    printf("\n       FINAL ROUTING TABLES");
+    printf("\n==========================================\n");
+
+    displayRoutingTables();
+
+    printf("\n==========================================");
+    printf("\nDistance Vector Routing Completed.");
+    printf("\n==========================================\n");
+}
