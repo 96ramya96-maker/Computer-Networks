@@ -1,0 +1,300 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+
+#define PORT 8082
+#define BUFFER_SIZE 2048
+#define MAX 10
+
+struct Subnet
+{
+    int mask;
+    unsigned int start;
+    unsigned int end;
+    int assigned;
+};
+
+int sockfd;
+struct sockaddr_in server_addr, client_addr;
+char buffer[BUFFER_SIZE];
+char reply[BUFFER_SIZE];
+socklen_t addr_len;
+
+char network[30];
+int totalMask;
+int n;
+
+struct Subnet subnet[MAX];
+
+
+/* Create UDP socket */
+void createSocket()
+{
+    sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+
+    if (sockfd < 0)
+    {
+        perror("socket failed");
+        exit(EXIT_FAILURE);
+    }
+
+    printf("UDP socket created\n");
+}
+
+
+/* Get network and subnet details */
+void getNetwork()
+{
+    int i;
+
+    printf("Enter Network Address: ");
+    scanf("%s", network);
+
+    printf("Enter Total Mask: /");
+    scanf("%d", &totalMask);
+
+    printf("Enter Number of Subnets: ");
+    scanf("%d", &n);
+
+    for (i = 0; i < n; i++)
+    {
+        printf("Enter mask for subnet %d: /", i + 1);
+        scanf("%d", &subnet[i].mask);
+
+        subnet[i].assigned = 0;
+    }
+}
+
+
+/* Convert IP address to number */
+unsigned int ipToNumber(char ip[])
+{
+    unsigned int a, b, c, d;
+
+    sscanf(ip, "%u.%u.%u.%u",
+           &a, &b, &c, &d);
+
+    return (a << 24) | (b << 16) | (c << 8) | d;
+}
+
+
+/* Convert number to IP address */
+void numberToIP(unsigned int num, char ip[])
+{
+    sprintf(ip, "%u.%u.%u.%u",
+            (num >> 24) & 255,
+            (num >> 16) & 255,
+            (num >> 8) & 255,
+            num & 255);
+}
+
+
+/* Calculate number of addresses */
+unsigned int getSize(int mask)
+{
+    return 1U << (32 - mask);
+}
+
+
+/* Calculate subnet ranges */
+void calculateSubnets()
+{
+    int i;
+    unsigned int start;
+    unsigned int size;
+
+    start = ipToNumber(network);
+
+    for (i = 0; i < n; i++)
+    {
+        size = getSize(subnet[i].mask);
+
+        subnet[i].start = start;
+        subnet[i].end = start + size - 1;
+
+        start = start + size;
+    }
+}
+
+
+/* Bind server to given IP address */
+void bindServer(char ip[])
+{
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(PORT);
+
+    server_addr.sin_addr.s_addr = inet_addr(ip);
+
+    if (bind(sockfd,
+             (struct sockaddr *)&server_addr,
+             sizeof(server_addr)) < 0)
+    {
+        perror("bind failed");
+        close(sockfd);
+        exit(EXIT_FAILURE);
+    }
+
+    printf("DHCP Server listening on port %d...\n", PORT);
+}
+
+
+/* Receive request from client */
+void receiveRequest()
+{
+    addr_len = sizeof(client_addr);
+
+    ssize_t bytes_received;
+
+    bytes_received = recvfrom(sockfd,
+                              buffer,
+                              BUFFER_SIZE - 1,
+                              0,
+                              (struct sockaddr *)&client_addr,
+                              &addr_len);
+
+    if (bytes_received < 0)
+    {
+        perror("recvfrom failed");
+        close(sockfd);
+        exit(EXIT_FAILURE);
+    }
+
+    buffer[bytes_received] = '\0';
+
+    printf("Request received: %s\n", buffer);
+}
+
+
+/* Create reply */
+void makeReply()
+{
+    int i;
+    int choice;
+    char startIP[30];
+    char endIP[30];
+    char temp[200];
+
+    strcpy(reply, "");
+
+    /* First request */
+    if (strcmp(buffer, "get client") == 0)
+    {
+        for (i = 0; i < n; i++)
+        {
+            numberToIP(subnet[i].start, startIP);
+            numberToIP(subnet[i].end, endIP);
+
+            sprintf(temp,
+                    "Subnet %d : %s/%d - %s\n",
+                    i + 1,
+                    startIP,
+                    subnet[i].mask,
+                    endIP);
+
+            strcat(reply, temp);
+        }
+    }
+
+    /* Second request */
+    else if (strncmp(buffer, "assign", 6) == 0)
+    {
+        sscanf(buffer, "assign %d", &choice);
+
+        if (choice < 1 || choice > n)
+        {
+            strcpy(reply, "Invalid subnet number");
+        }
+        else if (subnet[choice - 1].assigned == 1)
+        {
+            strcpy(reply, "Subnet already assigned");
+        }
+        else
+        {
+            subnet[choice - 1].assigned = 1;
+
+            sprintf(reply,
+                    "Subnet %d assigned successfully",
+                    choice);
+        }
+    }
+}
+
+
+/* Send reply to client */
+void sendReply()
+{
+    ssize_t bytes_sent;
+
+    bytes_sent = sendto(sockfd,
+                        reply,
+                        strlen(reply),
+                        0,
+                        (struct sockaddr *)&client_addr,
+                        addr_len);
+
+    if (bytes_sent < 0)
+    {
+        perror("sendto failed");
+        close(sockfd);
+        exit(EXIT_FAILURE);
+    }
+
+    printf("Response sent to client\n");
+}
+
+
+/* Close server */
+void closeServer()
+{
+    close(sockfd);
+
+    printf("Connection closed\n");
+}
+
+
+/* Main function */
+int main(int argc, char *argv[])
+{
+    if (argc != 2)
+    {
+        printf("Usage: ./server3 <server-ip>\n");
+        return 1;
+    }
+
+    printf("====================================\n");
+    printf("           DHCP SERVER\n");
+    printf("====================================\n");
+
+    createSocket();
+
+    getNetwork();
+
+    calculateSubnets();
+
+    bindServer(argv[1]);
+
+
+    /* FIRST COMMUNICATION */
+
+    receiveRequest();
+
+    makeReply();
+
+    sendReply();
+
+
+    /* SECOND COMMUNICATION */
+
+    receiveRequest();
+
+    makeReply();
+
+    sendReply();
+
+
+    closeServer();
+
+    return 0;
+}
