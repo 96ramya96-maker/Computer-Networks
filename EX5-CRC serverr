@@ -1,0 +1,120 @@
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+#include <stdlib.h>
+#include <arpa/inet.h>
+
+char generator[100];
+char originalCode[200]; /* Added this variable */
+char errorCode[200];    /* Added this variable */
+int sockfd, clientfd;
+
+void createServer() {
+    int opt = 1;
+    sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (sockfd < 0) {
+        printf("Socket creation failed\n");
+        exit(1);
+    }
+    setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    printf("Server socket created\n");
+}
+
+void bindServer() {
+    struct sockaddr_in server;
+    server.sin_family = AF_INET;
+    server.sin_addr.s_addr = inet_addr("127.0.0.1");
+    server.sin_port = htons(8080);
+    if (bind(sockfd, (struct sockaddr *)&server, sizeof(server)) < 0) {
+        printf("Bind failed\n");
+        exit(1);
+    }
+    printf("Server bind successful\n");
+}
+
+void waitClient() {
+    struct sockaddr_in client;
+    socklen_t len = sizeof(client);
+    listen(sockfd, 5);
+    printf("Waiting for client...\n");
+    clientfd = accept(sockfd, (struct sockaddr *)&client, &len);
+    if (clientfd < 0) {
+        printf("Accept failed\n");
+        exit(1);
+    }
+    printf("Client connected\n");
+}
+
+/* Updated function to check any passed codeword */
+void checkCRC(char codeword[]) {
+    char temp[200];
+    int i, j;
+    int genLen = strlen(generator);
+
+    /* Copy the passed codeword instead of the global one */
+    strcpy(temp, codeword); 
+
+    printf("\nChecking CRC...\n");
+    for (i = 0; i <= strlen(temp) - genLen; i++) {
+        if (temp[i] == '1') {
+            for (j = 0; j < genLen; j++) {
+                if (temp[i + j] == generator[j])
+                    temp[i + j] = '0';
+                else
+                    temp[i + j] = '1';
+            }
+        }
+    }
+
+    printf("Remainder : ");
+    for (i = strlen(temp) - (genLen - 1); i < strlen(temp); i++) {
+        printf("%c", temp[i]);
+    }
+    printf("\n");
+
+    for (i = strlen(temp) - (genLen - 1); i < strlen(temp); i++) {
+        if (temp[i] != '0') {
+            printf("Error Detected!\n");
+            return;
+        }
+    }
+    printf("No Error Detected.\n");
+}
+
+void receiveAndCheckData() {
+    /* Receive all three items */
+    recv(clientfd, generator, sizeof(generator), 0);
+    recv(clientfd, originalCode, sizeof(originalCode), 0);
+    recv(clientfd, errorCode, sizeof(errorCode), 0);
+
+    printf("\nGenerator : %s\n", generator);
+    
+    /* 1st Check: Original Codeword */
+    printf("\nReceived Original Codeword : %s", originalCode);
+    checkCRC(originalCode);
+
+    /* 2nd Check: Final/Error Codeword */
+    printf("\n------------------------------------");
+    printf("\nReceived Codeword after error : %s", errorCode);
+    checkCRC(errorCode);
+}
+
+void closeServer() {
+    close(clientfd);
+    close(sockfd);
+    printf("\nConnection closed\n");
+}
+
+int main() {
+    printf("====================================\n");
+    printf("       CRC TCP SERVER / RECEIVER\n");
+    printf("====================================\n");
+
+    createServer();
+    bindServer();
+    waitClient();
+    receiveAndCheckData(); /* Handles receiving and double-checking */
+    closeServer();
+
+    return 0;
+}
