@@ -1,0 +1,101 @@
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+
+#define PORT 8080
+
+int sockfd, clientfd;
+struct sockaddr_in server, client;
+char data[100];
+
+
+/* Create server socket */
+void createServer()
+{
+    sockfd = socket(AF_INET, SOCK_STREAM, 0);
+
+    if (sockfd < 0)
+    {
+        printf("Socket creation failed\n");
+        return;
+    }
+
+    printf("Server socket created\n");
+}
+
+
+/* Bind server to IP and port */
+void bindServer()
+{
+    server.sin_family = AF_INET;
+    server.sin_addr.s_addr = INADDR_ANY;
+    server.sin_port = htons(PORT);
+
+    if (bind(sockfd, (struct sockaddr *)&server, sizeof(server)) < 0)
+    {
+        printf("Bind failed\n");
+        return;
+    }
+
+    printf("Server bind successful\n");
+}
+
+
+/* Wait for client */
+void waitClient()
+{
+    listen(sockfd, 5);
+
+    printf("Waiting for client...\n");
+
+    socklen_t len = sizeof(client);
+
+    clientfd = accept(sockfd, (struct sockaddr *)&client, &len);
+
+    if (clientfd < 0)
+    {
+        printf("Client connection failed\n");
+        return;
+    }
+
+    printf("Client connected\n");
+}
+
+
+/* Receive string and send it back */
+void echoData()
+{
+    memset(data, 0, sizeof(data));
+
+    recv(clientfd, data, sizeof(data), 0);
+
+    printf("Received from client: %s\n", data);
+
+    send(clientfd, data, strlen(data), 0);
+
+    printf("String sent back to client\n");
+}
+
+
+/* Close connection */
+void closeServer()
+{
+    close(clientfd);
+    close(sockfd);
+
+    printf("Connection closed\n");
+}
+
+
+int main()
+{
+    createServer();
+    bindServer();
+    waitClient();
+    echoData();
+    closeServer();
+
+    return 0;
+}
