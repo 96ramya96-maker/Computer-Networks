@@ -1,0 +1,170 @@
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+
+char data[100];
+char generator[100];
+char code[200];
+char originalCode[200]; /* Added this variable */
+int sockfd;
+
+void getInput() {
+    printf("\nEnter Data : ");
+    scanf("%s", data);
+    printf("Enter Generator Polynomial : ");
+    scanf(" %[^\n]", generator);
+}
+
+void decimalToBinary(int n, char binary[]) {
+    int i = 0, j;
+    char temp[50];
+    if (n == 0) {
+        strcpy(binary, "0");
+        return;
+    }
+    while (n > 0) {
+        temp[i] = (n % 2) + '0';
+        n = n / 2;
+        i++;
+    }
+    for (j = 0; j < i; j++)
+        binary[j] = temp[i - j - 1];
+    binary[i] = '\0';
+}
+
+void convertGenerator() {
+    int i, power, maxPower = 0, decimal = 0;
+    char binary[50];
+    for (i = 0; generator[i] != '\0'; i++) {
+        if (generator[i] == 'x') {
+            if (generator[i + 1] == '^') {
+                power = atoi(&generator[i + 2]);
+                decimal = decimal + (1 << power);
+                if (power > maxPower) maxPower = power;
+            } else {
+                decimal = decimal + 2;
+                if (maxPower < 1) maxPower = 1;
+            }
+        }
+    }
+    for (i = 0; generator[i] != '\0'; i++) {
+        if (generator[i] == '1') {
+            decimal = decimal + 1;
+            break;
+        }
+    }
+    decimalToBinary(decimal, binary);
+    strcpy(generator, binary);
+    printf("\nGenerator Binary : %s\n", generator);
+}
+
+void calculateCRC() {
+    char temp[200];
+    int i, j;
+    int dataLen = strlen(data);
+    int genLen = strlen(generator);
+
+    strcpy(temp, data);
+    for (i = 0; i < genLen - 1; i++)
+        strcat(temp, "0");
+
+    for (i = 0; i <= strlen(temp) - genLen; i++) {
+        if (temp[i] == '1') {
+            for (j = 0; j < genLen; j++) {
+                if (temp[i + j] == generator[j])
+                    temp[i + j] = '0';
+                else
+                    temp[i + j] = '1';
+            }
+        }
+    }
+
+    strcpy(code, data);
+    
+    for (i = strlen(temp) - (genLen - 1); i < strlen(temp); i++) {
+        int len = strlen(code);
+        code[len] = temp[i];
+        code[len + 1] = '\0';
+    }
+    
+    /* Store the original codeword before asking for error */
+    strcpy(originalCode, code); 
+    printf("Codeword : %s\n", code);
+}
+
+void introduceError() {
+    int choice, pos;
+    printf("\nDo you want to introduce error? (1-Yes / 2-No): ");
+    scanf("%d", &choice);
+
+    if (choice == 1) {
+        printf("Enter bit position to change: ");
+        scanf("%d", &pos);
+        pos--;
+        if (pos >= 0 && pos < strlen(code)) {
+            if (code[pos] == '0')
+                code[pos] = '1';
+            else
+                code[pos] = '0';
+            printf("Codeword after error : %s\n", code);
+        } else {
+            printf("Invalid position!\n");
+        }
+    }
+}
+
+void createClient() {
+    sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (sockfd < 0) {
+        printf("Socket creation failed\n");
+        exit(1);
+    }
+    printf("\nClient socket created\n");
+}
+
+void connectServer() {
+    struct sockaddr_in server;
+    server.sin_family = AF_INET;
+    server.sin_port = htons(8080);
+    server.sin_addr.s_addr = inet_addr("127.0.0.1");
+
+    if (connect(sockfd, (struct sockaddr *)&server, sizeof(server)) < 0) {
+        printf("Connection failed\n");
+        exit(1);
+    }
+    printf("Connected to server\n");
+}
+
+void sendData() {
+    /* Send Generator, Original Codeword, AND Modified Codeword */
+    send(sockfd, generator, sizeof(generator), 0);
+    send(sockfd, originalCode, sizeof(originalCode), 0);
+    send(sockfd, code, sizeof(code), 0);
+    printf("Codewords sent to server\n");
+}
+
+void closeClient() {
+    close(sockfd);
+    printf("Connection closed\n");
+}
+
+int main() {
+    printf("====================================\n");
+    printf("       CRC TCP CLIENT / SENDER\n");
+    printf("====================================\n");
+
+    getInput();
+    convertGenerator();
+    calculateCRC();
+    
+    introduceError(); /* Modify the 'code' buffer, leaving 'originalCode' intact */
+
+    createClient();
+    connectServer();
+    sendData(); /* Sends both */
+    closeClient();
+
+    return 0;
+}
