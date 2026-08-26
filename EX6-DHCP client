@@ -1,0 +1,174 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+
+#define PORT 8082
+#define BUFFER_SIZE 2048
+
+int sockfd;
+struct sockaddr_in server_addr;
+char buffer[BUFFER_SIZE];
+socklen_t addr_len;
+
+void createSocket()
+{
+    sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+
+    if (sockfd < 0)
+    {
+        perror("socket failed");
+        exit(EXIT_FAILURE);
+    }
+
+    printf("UDP socket created\n");
+}
+
+void setServer(char ip[])
+{
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(PORT);
+
+    if (inet_pton(AF_INET,
+                  ip,
+                  &server_addr.sin_addr) <= 0)
+    {
+        perror("inet_pton failed");
+        close(sockfd);
+        exit(EXIT_FAILURE);
+    }
+}
+
+void requestSubnets()
+{
+    strcpy(buffer, "get client");
+
+    ssize_t bytes_sent;
+
+    bytes_sent = sendto(sockfd,
+                        buffer,
+                        strlen(buffer),
+                        0,
+                        (struct sockaddr *)&server_addr,
+                        sizeof(server_addr));
+
+    if (bytes_sent < 0)
+    {
+        perror("sendto failed");
+        close(sockfd);
+        exit(EXIT_FAILURE);
+    }
+}
+
+void receiveSubnets()
+{
+    ssize_t bytes_received;
+
+    addr_len = sizeof(server_addr);
+
+    bytes_received = recvfrom(sockfd,
+                              buffer,
+                              BUFFER_SIZE - 1,
+                              0,
+                              (struct sockaddr *)&server_addr,
+                              &addr_len);
+
+    if (bytes_received < 0)
+    {
+        perror("recvfrom failed");
+        close(sockfd);
+        exit(EXIT_FAILURE);
+    }
+
+    buffer[bytes_received] = '\0';
+
+    printf("\nAvailable Subnets:\n");
+    printf("%s", buffer);
+}
+
+void getSubnet()
+{
+    int choice;
+
+    printf("\nEnter subnet to assign: ");
+    scanf("%d", &choice);
+
+    sprintf(buffer, "assign %d", choice);
+}
+
+void sendSubnet()
+{
+    ssize_t bytes_sent;
+
+    bytes_sent = sendto(sockfd,
+                        buffer,
+                        strlen(buffer),
+                        0,
+                        (struct sockaddr *)&server_addr,
+                        sizeof(server_addr));
+
+    if (bytes_sent < 0)
+    {
+        perror("sendto failed");
+        close(sockfd);
+        exit(EXIT_FAILURE);
+    }
+}
+
+void receiveResult()
+{
+    ssize_t bytes_received;
+
+    addr_len = sizeof(server_addr);
+
+    bytes_received = recvfrom(sockfd,
+                              buffer,
+                              BUFFER_SIZE - 1,
+                              0,
+                              (struct sockaddr *)&server_addr,
+                              &addr_len);
+
+    if (bytes_received < 0)
+    {
+        perror("recvfrom failed");
+        close(sockfd);
+        exit(EXIT_FAILURE);
+    }
+
+    buffer[bytes_received] = '\0';
+
+    printf("\nReceived from server: %s\n", buffer);
+}
+
+void closeClient()
+{
+    close(sockfd);
+}
+
+int main(int argc, char *argv[])
+{
+    if (argc != 2)
+    {
+        printf("Usage: ./client3 <server-ip>\n");
+        return 1;
+    }
+
+    printf("====================================\n");
+    printf("           DHCP CLIENT\n");
+    printf("====================================\n");
+
+    createSocket();
+    setServer(argv[1]);
+
+    requestSubnets();
+    receiveSubnets();
+
+    getSubnet();
+    sendSubnet();
+    receiveResult();
+
+    closeClient();
+
+    return 0;
+}
