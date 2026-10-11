@@ -1,0 +1,18 @@
+#include <arpa/inet.h>
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#define PORT 5200
+int main(void){
+ int s=socket(AF_INET,SOCK_STREAM,0);if(s<0){perror("socket");return 1;}
+ int yes=1;setsockopt(s,SOL_SOCKET,SO_REUSEADDR,&yes,sizeof yes);
+ struct sockaddr_in a={0};a.sin_family=AF_INET;a.sin_addr.s_addr=INADDR_ANY;a.sin_port=htons(PORT);
+ if(bind(s,(struct sockaddr*)&a,sizeof a)<0||listen(s,5)<0){perror("bind/listen");return 1;}
+ printf("TCP echo server listening on port %d\n",PORT);
+ for(;;){int c=accept(s,NULL,NULL);if(c<0)continue;char b[1024];ssize_t n;
+  while((n=recv(c,b,sizeof b,0))>0){send(c,b,n,0);if(memmem(b,(size_t)n,"exit",4))break;}
+  close(c);
+ }
+}
