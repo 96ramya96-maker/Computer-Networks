@@ -1,0 +1,541 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/time.h>
+
+#define PORT 8081
+#define WINDOW_SIZE 3
+#define GENERATOR "1101"
+#define DATA_SIZE 100
+#define CODE_SIZE 1000
+
+/* ---------- Packet ---------- */
+
+typedef struct
+{
+    int frameNo;
+    int totalFrames;
+    char data[DATA_SIZE];
+    char codeword[CODE_SIZE];
+} Packet;
+
+/* ---------- Circular Linked List ---------- */
+
+typedef struct Node
+{
+    int frameNo;
+    char data[DATA_SIZE];
+    int acknowledged;
+    struct Node *next;
+} Node;
+
+Node *head = NULL;
+Node *tail = NULL;
+
+/* ---------- Add Frame ---------- */
+
+void addFrame(int frameNo, char data[])
+{
+    Node *newNode = malloc(sizeof(Node));
+
+    newNode->frameNo = frameNo;
+    strcpy(newNode->data, data);
+    newNode->acknowledged = 0;
+
+    if (head == NULL)
+    {
+        head = tail = newNode;
+        newNode->next = head;
+    }
+    else
+    {
+        newNode->next = head;
+        tail->next = newNode;
+        tail = newNode;
+    }
+}
+
+/* ---------- Find Frame ---------- */
+
+Node *findFrame(int frameNo)
+{
+    Node *current = head;
+
+    if (current == NULL)
+        return NULL;
+
+    do
+    {
+        if (current->frameNo == frameNo)
+            return current;
+
+        current = current->next;
+
+    } while (current != head);
+
+    return NULL;
+}
+
+/* ---------- Convert Data to Binary ---------- */
+
+void dataToBinary(char data[], char binary[])
+{
+    int i, j;
+    int value;
+    int position = 0;
+
+    for (i = 0; data[i] != '\0'; i++)
+    {
+        value = (unsigned char)data[i];
+
+        for (j = 7; j >= 0; j--)
+        {
+            if ((value >> j) & 1)
+                binary[position++] = '1';
+            else
+                binary[position++] = '0';
+        }
+    }
+
+    binary[position] = '\0';
+}
+
+/* ---------- XOR Operation ---------- */
+
+void xorOperation(char a[], char b[], int start, int length)
+{
+    int i;
+
+    for (i = 0; i < length; i++)
+    {
+        if (a[start + i] == b[i])
+            a[start + i] = '0';
+        else
+            a[start + i] = '1';
+    }
+}
+
+/* ---------- Calculate CRC ---------- */
+
+void calculateCRC(char binaryData[], char crc[])
+{
+    char temp[CODE_SIZE];
+
+    int dataLength = strlen(binaryData);
+    int generatorLength = strlen(GENERATOR);
+    int totalLength;
+    int i;
+
+    totalLength = dataLength + generatorLength - 1;
+
+    strcpy(temp, binaryData);
+
+    for (i = dataLength; i < totalLength; i++)
+        temp[i] = '0';
+
+    temp[totalLength] = '\0';
+
+    for (i = 0; i <= totalLength - generatorLength; i++)
+    {
+        if (temp[i] == '1')
+            xorOperation(temp, GENERATOR, i, generatorLength);
+    }
+
+    strncpy(crc, temp + dataLength, generatorLength - 1);
+
+    crc[generatorLength - 1] = '\0';
+}
+
+/* ---------- Create Codeword ---------- */
+
+void createCodeword(char data[], char codeword[])
+{
+    char binaryData[CODE_SIZE];
+    char crc[20];
+
+    dataToBinary(data, binaryData);
+
+    calculateCRC(binaryData, crc);
+
+    strcpy(codeword, binaryData);
+    strcat(codeword, crc);
+}
+
+/* ---------- Introduce Error ---------- */
+
+void introduceError(char codeword[])
+{
+    int position;
+
+    printf("Enter bit position to introduce error (starting from 1): ");
+    scanf("%d", &position);
+
+    if (position >= 1 && position <= strlen(codeword))
+    {
+        position--;
+
+        if (codeword[position] == '0')
+            codeword[position] = '1';
+        else
+            codeword[position] = '0';
+
+        printf("Error introduced at bit %d.\n", position + 1);
+    }
+    else
+    {
+        printf("Invalid position. No error introduced.\n");
+    }
+}
+
+/* ---------- Create Socket ---------- */
+
+int createSocket()
+{
+    int sockfd;
+
+    sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+
+    if (sockfd < 0)
+    {
+        perror("Socket creation failed");
+        exit(1);
+    }
+
+    return sockfd;
+}
+
+/* ---------- Server Address ---------- */
+
+void setupServerAddress(struct sockaddr_in *server)
+{
+    server->sin_family = AF_INET;
+    server->sin_port = htons(PORT);
+
+    inet_pton(AF_INET, "127.0.0.1",
+              &server->sin_addr);
+}
+
+/* ---------- Send Frame ---------- */
+
+void sendFrame(int sockfd,
+               struct sockaddr_in *server,
+               Node *frame,
+               int totalFrames,
+               int introduceErrorNow)
+{
+    Packet packet;
+
+    packet.frameNo = frame->frameNo;
+    packet.totalFrames = totalFrames;
+
+    strcpy(packet.data, frame->data);
+
+    createCodeword(frame->data, packet.codeword);
+
+    if (introduceErrorNow)
+        introduceError(packet.codeword);
+
+    printf("\nSending Frame %d\n", frame->frameNo);
+    printf("Data     : %s\n", frame->data);
+    printf("Codeword : %s\n", packet.codeword);
+
+    if (sendto(sockfd,
+               &packet,
+               sizeof(packet),
+               0,
+               (struct sockaddr *)server,
+               sizeof(*server)) < 0)
+    {
+        perror("sendto failed");
+    }
+}
+
+/* ---------- Check All ACKs ---------- */
+
+int allAcknowledged(int totalFrames)
+{
+    Node *current = head;
+    int i;
+
+    if (current == NULL)
+        return 1;
+
+    for (i = 0; i < totalFrames; i++)
+    {
+        if (!current->acknowledged)
+            return 0;
+
+        current = current->next;
+    }
+
+    return 1;
+}
+
+/* ---------- Selective Repeat ---------- */
+
+void runSelectiveRepeat(int choice)
+{
+    int sockfd;
+    struct sockaddr_in server;
+
+    int n;
+    int i;
+    int base = 1;
+
+    int introduceCRCError = 0;
+
+    sockfd = createSocket();
+
+    setupServerAddress(&server);
+
+    printf("\nEnter number of frames: ");
+    scanf("%d", &n);
+
+    for (i = 1; i <= n; i++)
+    {
+        char data[DATA_SIZE];
+
+        printf("Enter data for Frame %d: ", i);
+        scanf(" %[^\n]", data);
+
+        addFrame(i, data);
+    }
+
+    /* ---------- CRC Error Choice ---------- */
+
+    if (choice == 4 && n >= 2)
+    {
+        int errorChoice;
+
+        printf("\nFrame 2 selected for CRC test.\n");
+        printf("1. Introduce error\n");
+        printf("2. Do not introduce error\n");
+        printf("Enter choice: ");
+        scanf("%d", &errorChoice);
+
+        if (errorChoice == 1)
+            introduceCRCError = 1;
+    }
+
+    /* ---------- Main SR Loop ---------- */
+
+    while (!allAcknowledged(n))
+    {
+        int i;
+
+        /*
+           Send all unacknowledged frames
+           in the current window.
+        */
+
+        for (i = 0; i < WINDOW_SIZE; i++)
+        {
+            int frameNo = base + i;
+
+            Node *frame;
+
+            if (frameNo > n)
+                break;
+
+            frame = findFrame(frameNo);
+
+            if (frame == NULL)
+                continue;
+
+            if (frame->acknowledged)
+                continue;
+
+            /* ---------- Case 3: Frame Loss ---------- */
+
+            if (choice == 3 && frameNo == 2)
+            {
+                static int frame2Lost = 0;
+
+                if (frame2Lost == 0)
+                {
+                    printf("\nFrame 2 is LOST during first transmission.\n");
+
+                    frame2Lost = 1;
+
+                    continue;
+                }
+            }
+
+            /* ---------- Case 4: CRC Error ---------- */
+
+            if (choice == 4 &&
+                frameNo == 2 &&
+                introduceCRCError == 1)
+            {
+                sendFrame(sockfd,
+                          &server,
+                          frame,
+                          n,
+                          1);
+
+                /*
+                   Error is introduced only once.
+                   Retransmission will be correct.
+                */
+
+                introduceCRCError = 0;
+            }
+            else
+            {
+                sendFrame(sockfd,
+                          &server,
+                          frame,
+                          n,
+                          0);
+            }
+        }
+
+        /* ---------- Wait for ACK/NACK ---------- */
+
+        struct timeval timeout;
+
+        timeout.tv_sec = 3;
+        timeout.tv_usec = 0;
+
+        setsockopt(sockfd,
+                   SOL_SOCKET,
+                   SO_RCVTIMEO,
+                   &timeout,
+                   sizeof(timeout));
+
+        int gotReply = 0;
+
+        while (1)
+        {
+            char reply[50];
+
+            int bytes;
+
+            bytes = recvfrom(sockfd,
+                             reply,
+                             sizeof(reply) - 1,
+                             0,
+                             NULL,
+                             NULL);
+
+            if (bytes < 0)
+                break;
+
+            reply[bytes] = '\0';
+
+            char type[10];
+            int frameNo;
+
+            if (sscanf(reply,
+                       "%9s %d",
+                       type,
+                       &frameNo) != 2)
+            {
+                continue;
+            }
+
+            Node *frame = findFrame(frameNo);
+
+            if (frame == NULL)
+                continue;
+
+            gotReply = 1;
+
+            /* ---------- ACK ---------- */
+
+            if (strcmp(type, "ACK") == 0)
+            {
+                if (!frame->acknowledged)
+                {
+                    frame->acknowledged = 1;
+
+                    printf("ACK %d received.\n",
+                           frameNo);
+                }
+            }
+
+            /* ---------- NACK ---------- */
+
+            else if (strcmp(type, "NACK") == 0)
+            {
+                printf("NACK %d received.\n",
+                       frameNo);
+
+                printf("CRC error detected.\n");
+
+                printf("Retransmitting Frame %d...\n",
+                       frameNo);
+
+                sendFrame(sockfd,
+                          &server,
+                          frame,
+                          n,
+                          0);
+            }
+
+            /*
+               After receiving one reply,
+               wait briefly for other ACKs.
+            */
+
+            timeout.tv_sec = 0;
+            timeout.tv_usec = 200000;
+
+            setsockopt(sockfd,
+                       SOL_SOCKET,
+                       SO_RCVTIMEO,
+                       &timeout,
+                       sizeof(timeout));
+        }
+
+        if (!gotReply)
+        {
+            printf("\nTimeout! No ACK/NACK received.\n");
+            printf("Retransmitting unacknowledged frames...\n");
+        }
+
+        /* ---------- Slide Window ---------- */
+
+        while (base <= n)
+        {
+            Node *frame = findFrame(base);
+
+            if (frame != NULL &&
+                frame->acknowledged)
+            {
+                base++;
+            }
+            else
+            {
+                break;
+            }
+        }
+    }
+
+    printf("\nAll frames transmitted successfully.\n");
+
+    close(sockfd);
+}
+
+/* ---------- Main ---------- */
+
+int main()
+{
+    int choice;
+
+    printf("\n===== SELECTIVE REPEAT =====\n");
+
+    printf("1. Normal Transmission\n");
+    printf("2. Sender Starts Before Receiver\n");
+    printf("3. Frame Loss\n");
+    printf("4. CRC Error\n");
+
+    printf("Enter choice: ");
+    scanf("%d", &choice);
+
+    runSelectiveRepeat(choice);
+
+    return 0;
+}
