@@ -1,0 +1,12 @@
+#include <arpa/inet.h>
+#include <pthread.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#define PORT 5004
+static int sockfd;
+static void *receiver(void *arg){(void)arg;char b[1024];for(;;){ssize_t n=recv(sockfd,b,sizeof b-1,0);if(n<=0)break;b[n]=0;fputs(b,stdout);fflush(stdout);}return NULL;}
+int main(void){sockfd=socket(AF_INET,SOCK_STREAM,0);if(sockfd<0){perror("socket");return 1;}struct sockaddr_in a={0};a.sin_family=AF_INET;a.sin_port=htons(PORT);inet_pton(AF_INET,"127.0.0.1",&a.sin_addr);if(connect(sockfd,(struct sockaddr*)&a,sizeof a)<0){perror("connect");return 1;}char b[1024];ssize_t n=recv(sockfd,b,sizeof b-1,0);if(n>0){b[n]=0;fputs(b,stdout);}char name[64];if(!fgets(name,sizeof name,stdin)){close(sockfd);return 0;}send(sockfd,name,strlen(name),0);pthread_t t;pthread_create(&t,NULL,receiver,NULL);pthread_detach(t);while(fgets(b,sizeof b,stdin)){send(sockfd,b,strlen(b),0);if(!strncmp(b,"/quit",5))break;}shutdown(sockfd,SHUT_RDWR);close(sockfd);return 0;}
