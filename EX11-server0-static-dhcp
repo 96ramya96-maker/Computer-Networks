@@ -1,0 +1,17 @@
+SERVER0 — Desktop > IP Configuration:
+IP Address:      192.168.10.2
+Subnet Mask:     255.255.255.0
+Default Gateway: 192.168.10.1
+DNS Server:      8.8.8.8
+
+If the question specifically requires a dedicated Server-PT DHCP service rather than router DHCP:
+Server0 > Services > DHCP > On
+Pool Name: OFFICE
+Default Gateway: 192.168.10.1
+DNS Server: 8.8.8.8
+Start IP Address: 192.168.10.10
+Subnet Mask: 255.255.255.0
+Maximum Number of Users: 41
+Click Add/Save.
+
+In that case, keep Server0 static at 192.168.10.2 and do not configure the router's `ip dhcp pool OFFICE` simultaneously.
