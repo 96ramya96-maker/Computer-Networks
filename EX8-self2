@@ -1,0 +1,62 @@
+
+#include <stdio.h>
+
+int main() {
+    int n, w, lost, base = 0, total = 0;
+    int lossHandled = 0;
+
+    printf("Enter number of frames: ");
+    scanf("%d", &n);
+    printf("Enter window size: ");
+    scanf("%d", &w);
+    printf("Enter frame number to lose (0 for none): ");
+    scanf("%d", &lost);
+
+    if (n <= 0 || w <= 0 || w > n ||
+        lost < 0 || lost > n) {
+        printf("Invalid input!\n");
+        return 1;
+    }
+
+    while (base < n) {
+        int end = base + w;
+        if (end > n) end = n;
+
+        printf("\nSending window: ");
+        for (int i = base; i < end; i++) {
+            printf("%d ", i + 1);
+            total++;
+        }
+        printf("\n");
+
+        for (int i = base; i < end; i++) {
+            int frame = i + 1;
+
+            if (frame == lost && !lossHandled) {
+                printf("Frame %d lost. No ACK received.\n",
+                       frame);
+                lossHandled = 1;
+            } else {
+                printf("Frame %d received. ACK %d sent.\n",
+                       frame, frame);
+            }
+        }
+
+        if (lost > base && lost <= end && lossHandled) {
+            // The loss may have happened in this window.
+            // Retransmit only that frame.
+            if (lost - 1 >= base) {
+                printf("Retransmitting only frame %d\n", lost);
+                total++;
+                printf("Frame %d received. ACK %d sent.\n",
+                       lost, lost);
+            }
+        }
+
+        base = end;
+    }
+
+    printf("\nAll frames delivered successfully.\n");
+    printf("Total frame transmissions: %d\n", total);
+    return 0;
+}
