@@ -1,0 +1,30 @@
+#include <arpa/inet.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <netinet/in.h>
+#define PORT 5102
+int main(void){
+ int s=socket(AF_INET,SOCK_DGRAM,0);if(s<0){perror("socket");return 1;}
+ struct timeval tv={2,0};setsockopt(s,SOL_SOCKET,SO_RCVTIMEO,&tv,sizeof tv);
+ struct sockaddr_in a={0};a.sin_family=AF_INET;a.sin_port=htons(PORT);inet_pton(AF_INET,"127.0.0.1",&a.sin_addr);
+ char loc[64];printf("Enter location (one word, e.g. Chennai): ");scanf("%63s",loc);int seq=1;
+ while(1){
+  double t,h,p,w;printf("Enter temperature humidity pressure wind (or Ctrl+C to stop): ");
+  if(scanf("%lf %lf %lf %lf",&t,&h,&p,&w)!=4)break;
+  char packet[256],ack[256];snprintf(packet,sizeof packet,"%d %s %.2f %.2f %.2f %.2f",seq,loc,t,h,p,w);
+  int got=0;
+  for(int tries=1;tries<=3&&!got;tries++){
+   sendto(s,packet,strlen(packet),0,(struct sockaddr*)&a,sizeof a);
+   struct sockaddr_in from;socklen_t fl=sizeof from;ssize_t n=recvfrom(s,ack,sizeof ack-1,0,(struct sockaddr*)&from,&fl);
+   if(n>=0){ack[n]=0;printf("Server: %s\n",ack);got=1;}
+   else printf("ACK timeout; retransmission %d\n",tries);
+  }
+  if(!got)printf("Reading %d failed after retries.\n",seq);
+  seq++;sleep(2);
+ }
+ close(s);return 0;
+}
