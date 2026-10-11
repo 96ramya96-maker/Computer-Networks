@@ -1,0 +1,94 @@
+#define _POSIX_C_SOURCE 200809L
+#include <arpa/inet.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+
+#define PORT 5101
+#define MAX 1024
+#define BOOKS_FILE "books.txt"
+#define LOG_FILE "library.log"
+
+typedef struct { int id; char title[80], author[80]; int available; } Book;
+static Book books[100];
+static int count = 0;
+static struct { char key[80], response[MAX]; } cache[100];
+static int cache_count = 0;
+
+static void log_request(const char *s) {
+    FILE *f = fopen(LOG_FILE, "a");
+    if (f) { time_t t=time(NULL); fprintf(f,"%ld %s\n",(long)t,s); fclose(f); }
+}
+static void save_books(void) {
+    FILE *f=fopen(BOOKS_FILE,"w"); if(!f) return;
+    for(int i=0;i<count;i++)
+        fprintf(f,"%d|%s|%s|%d\n",books[i].id,books[i].title,books[i].author,books[i].available);
+    fclose(f);
+}
+static void load_books(void) {
+    FILE *f=fopen(BOOKS_FILE,"r");
+    if(f) {
+        char line[256];
+        while(fgets(line,sizeof line,f) && count<100) {
+            Book b; if(sscanf(line,"%d|%79[^|]|%79[^|]|%d",&b.id,b.title,b.author,&b.available)==4) books[count++]=b;
+        }
+        fclose(f);
+    }
+    if(count==0) {
+        books[count++]=(Book){101,"Computer Networks","Tanenbaum",1};
+        books[count++]=(Book){102,"C Programming","Kernighan",1};
+        books[count++]=(Book){103,"Data Structures","Lipschutz",1};
+        save_books();
+    }
+}
+static int find_book(int id) { for(int i=0;i<count;i++) if(books[i].id==id)return i; return -1; }
+static void make_response(char *out, const char *request) {
+    char cmd[32]="", arg[128]=""; sscanf(request,"%31s %127[^\n]",cmd,arg);
+    if(!strcmp(cmd,"LIST")) {
+        strcpy(out,"BOOK LIST\n");
+        for(int i=0;i<count;i++){char row[220];snprintf(row,sizeof row,"%d | %s | %s | %s\n",books[i].id,books[i].title,books[i].author,books[i].available?"Available":"Borrowed");strncat(out,row,MAX-strlen(out)-1);}
+    } else if(!strcmp(cmd,"SEARCH")) {
+        if(!arg[0]) { strcpy(out,"Usage: SEARCH keyword"); return; }
+        strcpy(out,"Search results:\n"); int found=0;
+        for(int i=0;i<count;i++) if(strstr(books[i].title,arg)||strstr(books[i].author,arg)){char row[220];snprintf(row,sizeof row,"%d | %s | %s | %s\n",books[i].id,books[i].title,books[i].author,books[i].available?"Available":"Borrowed");strncat(out,row,MAX-strlen(out)-1);found=1;}
+        if(!found)strcat(out,"No matching books.\n");
+    } else if(!strcmp(cmd,"BORROW")||!strcmp(cmd,"RETURN")) {
+        int id=atoi(arg), i=find_book(id);
+        if(i<0) snprintf(out,MAX,"ERROR: Book ID %d not found.",id);
+        else if(!strcmp(cmd,"BORROW")) {
+            if(!books[i].available) snprintf(out,MAX,"Book %d is already borrowed.",id);
+            else {books[i].available=0;save_books();snprintf(out,MAX,"Borrow successful: %s",books[i].title);}
+        } else {
+            if(books[i].available) snprintf(out,MAX,"Book %d is already available.",id);
+            else {books[i].available=1;save_books();snprintf(out,MAX,"Return successful: %s",books[i].title);}
+        }
+    } else strcpy(out,"ERROR: Commands are LIST, SEARCH keyword, BORROW id, RETURN id, QUIT.");
+}
+int main(void) {
+    load_books();
+    int s=socket(AF_INET,SOCK_DGRAM,0); if(s<0){perror("socket");return 1;}
+    struct sockaddr_in a={0},peer; a.sin_family=AF_INET;a.sin_addr.s_addr=INADDR_ANY;a.sin_port=htons(PORT);
+    if(bind(s,(struct sockaddr*)&a,sizeof a)<0){perror("bind");return 1;}
+    printf("UDP Library server on port %d\n",PORT);
+    for(;;) {
+        char buf[MAX],out[MAX],key[80]=""; socklen_t len=sizeof peer;
+        ssize_t n=recvfrom(s,buf,sizeof(buf)-1,0,(struct sockaddr*)&peer,&len); if(n<0)continue;buf[n]=0;
+        char *sep=strchr(buf,'|'); if(!sep) {strcpy(out,"ERROR: Expected requestID|command");}
+        else {
+            *sep=0;strncpy(key,buf,sizeof key-1);char *request=sep+1;int duplicate=-1;
+            for(int i=0;i<cache_count;i++)if(!strcmp(cache[i].key,key)){duplicate=i;break;}
+            if(duplicate>=0)strncpy(out,cache[duplicate].response,sizeof out-1);
+            else {
+                make_response(out,request);
+                if(cache_count<100){strncpy(cache[cache_count].key,key,sizeof cache[cache_count].key-1);strncpy(cache[cache_count].response,out,sizeof cache[cache_count].response-1);cache_count++;}
+                char logline[1400];snprintf(logline,sizeof logline,"request=%s command=%s",key,request);log_request(logline);
+            }
+        }
+        sendto(s,out,strlen(out),0,(struct sockaddr*)&peer,len);
+        /* UDP response is also the application-level acknowledgement. */
+    }
+}
