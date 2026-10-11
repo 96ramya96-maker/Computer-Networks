@@ -1,0 +1,145 @@
+#include "ns3/core-module.h"
+#include "ns3/network-module.h"
+#include "ns3/internet-module.h"
+#include "ns3/point-to-point-module.h"
+#include "ns3/applications-module.h"
+#include "ns3/flow-monitor-module.h"
+#include <fstream>
+#include <iostream>
+#include <string>
+
+using namespace ns3;
+
+static std::ofstream cwndFile;
+static void CwndChange(uint32_t oldCwnd, uint32_t newCwnd)
+{
+    cwndFile << Simulator::Now().GetSeconds() << "\t" << newCwnd << "\n";
+}
+
+int main(int argc, char *argv[])
+{
+    std::string tcpType = "TcpNewReno";
+    double simTime = 30.0;
+    std::string bottleneckRate = "2Mbps";
+    std::string bottleneckDelay = "20ms";
+    std::string errorRate = "0.00001";
+
+    CommandLine cmd(__FILE__);
+    cmd.AddValue("tcpType", "TcpNewReno or TcpCubic", tcpType);
+    cmd.AddValue("simTime", "Simulation duration in seconds", simTime);
+    cmd.AddValue("bottleneckRate", "Bottleneck link rate", bottleneckRate);
+    cmd.AddValue("bottleneckDelay", "Bottleneck link delay", bottleneckDelay);
+    cmd.AddValue("errorRate", "Packet error rate on bottleneck receiver device", errorRate);
+    cmd.Parse(argc, argv);
+
+    if (tcpType != "TcpNewReno" && tcpType != "TcpCubic") {
+        std::cerr << "Use TcpNewReno or TcpCubic.\n";
+        return 1;
+    }
+
+    Config::SetDefault("ns3::TcpL4Protocol::SocketType",
+        TypeIdValue(TypeId::LookupByName("ns3::" + tcpType)));
+    Config::SetDefault("ns3::TcpSocket::SegmentSize", UintegerValue(1000));
+
+    NodeContainer nodes;
+    nodes.Create(4); // sender A, sender B, router, receiver
+
+    PointToPointHelper access;
+    access.SetDeviceAttribute("DataRate", StringValue("10Mbps"));
+    access.SetChannelAttribute("Delay", StringValue("5ms"));
+
+    PointToPointHelper bottleneck;
+    bottleneck.SetDeviceAttribute("DataRate", StringValue(bottleneckRate));
+    bottleneck.SetChannelAttribute("Delay", StringValue(bottleneckDelay));
+    bottleneck.SetQueue("ns3::DropTailQueue<Packet>",
+        "MaxSize", StringValue("20p"));
+
+    NetDeviceContainer aRouter = access.Install(nodes.Get(0), nodes.Get(2));
+    NetDeviceContainer bRouter = access.Install(nodes.Get(1), nodes.Get(2));
+    NetDeviceContainer routerReceiver = bottleneck.Install(nodes.Get(2), nodes.Get(3));
+
+    InternetStackHelper internet;
+    internet.Install(nodes);
+
+    Ipv4AddressHelper ip;
+    ip.SetBase("10.1.1.0", "255.255.255.0"); ip.Assign(aRouter);
+    ip.SetBase("10.1.2.0", "255.255.255.0"); ip.Assign(bRouter);
+    ip.SetBase("10.1.3.0", "255.255.255.0");
+    Ipv4InterfaceContainer bottleneckIf = ip.Assign(routerReceiver);
+    Ipv4GlobalRoutingHelper::PopulateRoutingTables();
+
+    // Add packet errors on the receiver-side bottleneck device.
+    Ptr<RateErrorModel> em = CreateObject<RateErrorModel>();
+    em->SetAttribute("ErrorRate", DoubleValue(std::stod(errorRate)));
+    em->SetAttribute("ErrorUnit", EnumValue(RateErrorModel::ERROR_UNIT_PACKET));
+    routerReceiver.Get(1)->SetAttribute("ReceiveErrorModel", PointerValue(em));
+
+    const uint16_t port1 = 50001, port2 = 50002;
+    PacketSinkHelper sink1("ns3::TcpSocketFactory",
+        InetSocketAddress(Ipv4Address::GetAny(), port1));
+    PacketSinkHelper sink2("ns3::TcpSocketFactory",
+        InetSocketAddress(Ipv4Address::GetAny(), port2));
+    auto sinkApps1 = sink1.Install(nodes.Get(3));
+    auto sinkApps2 = sink2.Install(nodes.Get(3));
+    sinkApps1.Start(Seconds(0)); sinkApps1.Stop(Seconds(simTime));
+    sinkApps2.Start(Seconds(0)); sinkApps2.Stop(Seconds(simTime));
+
+    BulkSendHelper send1("ns3::TcpSocketFactory",
+        InetSocketAddress(bottleneckIf.GetAddress(1), port1));
+    BulkSendHelper send2("ns3::TcpSocketFactory",
+        InetSocketAddress(bottleneckIf.GetAddress(1), port2));
+    send1.SetAttribute("MaxBytes", UintegerValue(0));
+    send2.SetAttribute("MaxBytes", UintegerValue(0));
+    auto src1 = send1.Install(nodes.Get(0));
+    auto src2 = send2.Install(nodes.Get(1));
+    src1.Start(Seconds(1)); src1.Stop(Seconds(simTime - 0.5));
+    src2.Start(Seconds(1)); src2.Stop(Seconds(simTime - 0.5));
+
+    cwndFile.open(tcpType + "-cwnd.txt");
+    cwndFile << "Time(s)\tCwnd(bytes)\n";
+    Config::ConnectWithoutContext(
+        "/NodeList/0/$ns3::TcpL4Protocol/SocketList/0/CongestionWindow",
+        MakeCallback(&CwndChange));
+
+    FlowMonitorHelper flowHelper;
+    Ptr<FlowMonitor> monitor = flowHelper.InstallAll();
+
+    Simulator::Stop(Seconds(simTime));
+    Simulator::Run();
+    monitor->CheckForLostPackets();
+
+    Ptr<Ipv4FlowClassifier> classifier =
+        DynamicCast<Ipv4FlowClassifier>(flowHelper.GetClassifier());
+    auto stats = monitor->GetFlowStats();
+
+    std::cout << "\nAlgorithm: " << tcpType
+              << "\nBottleneck: " << bottleneckRate
+              << ", delay: " << bottleneckDelay
+              << ", packet error rate: " << errorRate << "\n";
+
+    for (auto it = stats.begin(); it != stats.end(); ++it) {
+        auto tuple = classifier->FindFlow(it->first);
+        if (tuple.destinationPort != port1 && tuple.destinationPort != port2)
+            continue;
+        double duration = it->second.timeLastRxPacket.GetSeconds()
+                        - it->second.timeFirstTxPacket.GetSeconds();
+        double throughput = duration > 0
+            ? it->second.rxBytes * 8.0 / duration / 1e6 : 0;
+        double delay = it->second.rxPackets > 0
+            ? it->second.delaySum.GetMilliSeconds() / it->second.rxPackets : 0;
+        double loss = it->second.txPackets > 0
+            ? 100.0 * it->second.lostPackets / it->second.txPackets : 0;
+        std::cout << "Destination port " << tuple.destinationPort
+                  << ": Tx=" << it->second.txPackets
+                  << ", Rx=" << it->second.rxPackets
+                  << ", Lost=" << it->second.lostPackets
+                  << ", Loss(%)=" << loss
+                  << ", Throughput(Mbps)=" << throughput
+                  << ", AvgDelay(ms)=" << delay << "\n";
+    }
+
+    monitor->SerializeToXmlFile(tcpType + "-flowmon.xml", true, true);
+    Simulator::Destroy();
+    cwndFile.close();
+    return 0;
+}
