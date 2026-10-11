@@ -1,0 +1,19 @@
+#include <arpa/inet.h>
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <netinet/in.h>
+#define PORT 5104
+int main(void){
+ int s=socket(AF_INET,SOCK_DGRAM,0);if(s<0){perror("socket");return 1;}
+ struct timeval tv={2,0};setsockopt(s,SOL_SOCKET,SO_RCVTIMEO,&tv,sizeof tv);
+ struct sockaddr_in a={0};a.sin_family=AF_INET;a.sin_port=htons(PORT);inet_pton(AF_INET,"127.0.0.1",&a.sin_addr);
+ char reg[128],out[512];
+ while(1){printf("Enter register number or EXIT: ");if(!fgets(reg,sizeof reg,stdin))break;reg[strcspn(reg,"\r\n")]=0;if(!strcmp(reg,"EXIT"))break;
+  sendto(s,reg,strlen(reg),0,(struct sockaddr*)&a,sizeof a);struct sockaddr_in from;socklen_t fl=sizeof from;ssize_t n=recvfrom(s,out,sizeof out-1,0,(struct sockaddr*)&from,&fl);
+  if(n<0){puts("Request timed out.");continue;}out[n]=0;printf("%s\n",out);
+ }
+ close(s);return 0;
+}
