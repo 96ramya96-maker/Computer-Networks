@@ -1,0 +1,55 @@
+Q9 — Four-router OSPF enterprise network
+Suggested topology: R1—R2—R3—R4, plus a redundant R1—R4 link to show failover.
+Each router has a local LAN. Use point-to-point /30 links.
+Example LANs:
+R1 LAN 192.168.1.0/24; R2 LAN 192.168.2.0/24;
+R3 LAN 192.168.3.0/24; R4 LAN 192.168.4.0/24.
+Example transit networks:
+R1-R2 10.0.12.0/30; R2-R3 10.0.23.0/30;
+R3-R4 10.0.34.0/30; R1-R4 10.0.14.0/30.
+Assign each interface a unique IP in its stated network, enable `no shutdown`,
+and configure serial clock rate on DCE ends.
+
+On EACH router, use OSPF process 1 and advertise the LAN and all directly connected transit networks. Example for R1 (adjust interface IPs and networks to match your build):
+conf t
+router ospf 1
+ router-id 1.1.1.1
+ network 192.168.1.0 0.0.0.255 area 0
+ network 10.0.12.0 0.0.0.3 area 0
+ network 10.0.14.0 0.0.0.3 area 0
+end
+
+R2:
+router ospf 1
+ router-id 2.2.2.2
+ network 192.168.2.0 0.0.0.255 area 0
+ network 10.0.12.0 0.0.0.3 area 0
+ network 10.0.23.0 0.0.0.3 area 0
+
+R3:
+router ospf 1
+ router-id 3.3.3.3
+ network 192.168.3.0 0.0.0.255 area 0
+ network 10.0.23.0 0.0.0.3 area 0
+ network 10.0.34.0 0.0.0.3 area 0
+
+R4:
+router ospf 1
+ router-id 4.4.4.4
+ network 192.168.4.0 0.0.0.255 area 0
+ network 10.0.34.0 0.0.0.3 area 0
+ network 10.0.14.0 0.0.0.3 area 0
+
+Verification:
+show ip ospf neighbor
+show ip route ospf
+show ip protocols
+ping between PCs on different LANs
+tracert <remote-PC-IP>
+
+Failover experiment:
+1. Run a continuous ping between PCs behind R1 and R3/R4.
+2. Disable one link interface with `interface ...` then `shutdown`.
+3. Observe OSPF route recalculation and recovery of ping after convergence.
+4. Restore the link with `no shutdown`.
+Record convergence time using simulation timestamps/ping replies; exact time depends on Packet Tracer settings.
