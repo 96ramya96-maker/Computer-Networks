@@ -1,0 +1,92 @@
+#define _POSIX_C_SOURCE 200809L
+#include <arpa/inet.h>
+#include <pthread.h>
+#include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+
+#define PORT 5001
+#define BACKLOG 20
+#define BUF 2048
+
+static pthread_mutex_t db_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+typedef struct { const char *user, *pass; } Account;
+static Account accounts[] = {{"student1","pass123"}, {"student2","pass456"}, {"student3","pass789"}};
+static const char *questions[] = {
+    "Q1: Which protocol provides reliable, connection-oriented transport?\\nA) UDP  B) TCP  C) IP  D) ARP\\nYour answer (A/B/C/D): ",
+    "Q2: Which layer is responsible for routing packets?\\nA) Application  B) Transport  C) Network  D) Data Link\\nYour answer (A/B/C/D): ",
+    "Q3: What does DNS primarily do?\\nA) Maps names to IP addresses  B) Encrypts files  C) Assigns MAC addresses  D) Detects errors\\nYour answer (A/B/C/D): "
+};
+static const char answers[] = {'B','C','A'};
+
+static void log_event(const char *message) {
+    time_t now = time(NULL); struct tm tmv; char stamp[64];
+    localtime_r(&now, &tmv); strftime(stamp, sizeof stamp, "%Y-%m-%d %H:%M:%S", &tmv);
+    pthread_mutex_lock(&log_mutex);
+    FILE *f = fopen("exam.log", "a");
+    if (f) { fprintf(f, "[%s] %s\n", stamp, message); fclose(f); }
+    pthread_mutex_unlock(&log_mutex);
+}
+static int send_text(int fd, const char *s) { return send(fd, s, strlen(s), 0) >= 0; }
+static int recv_line(int fd, char *buf, size_t size) {
+    size_t n=0; char c;
+    while (n+1<size) {
+        ssize_t r=recv(fd,&c,1,0);
+        if (r<=0) return 0;
+        if (c=='\r') continue;
+        if (c=='\n') break;
+        buf[n++]=c;
+    }
+    buf[n]='\0'; return 1;
+}
+static int authenticate(const char *u, const char *p) {
+    int ok=0;
+    pthread_mutex_lock(&db_mutex);
+    for (size_t i=0;i<sizeof(accounts)/sizeof(accounts[0]);i++)
+        if (!strcmp(u,accounts[i].user) && !strcmp(p,accounts[i].pass)) { ok=1; break; }
+    pthread_mutex_unlock(&db_mutex);
+    return ok;
+}
+static void *handle_client(void *arg) {
+    int fd=*(int*)arg; free(arg);
+    char user[128], pass[128], buf[BUF], logbuf[256];
+    send_text(fd,"ONLINE EXAMINATION SYSTEM\nDemo accounts: student1/pass123, student2/pass456, student3/pass789\nUsername: ");
+    if (!recv_line(fd,user,sizeof user)) goto done;
+    send_text(fd,"Password: ");
+    if (!recv_line(fd,pass,sizeof pass)) goto done;
+    snprintf(logbuf,sizeof logbuf,"login attempt username=%s",user); log_event(logbuf);
+    if (!authenticate(user,pass)) { send_text(fd,"Authentication failed. Disconnecting.\n"); log_event("authentication failed"); goto done; }
+    send_text(fd,"Login successful. Answer each question with A, B, C, or D.\n");
+    int score=0;
+    for (int i=0;i<3;i++) {
+        send_text(fd,questions[i]);
+        if (!recv_line(fd,buf,sizeof buf)) { log_event("client disconnected during exam"); goto done; }
+        char a=(char)buf[0]; if (a>='a'&&a<='z') a-=32;
+        if (a==answers[i]) { score++; send_text(fd,"Correct!\n\n"); }
+        else { snprintf(buf,sizeof buf,"Incorrect. Correct answer: %c\n\n",answers[i]); send_text(fd,buf); }
+    }
+    snprintf(buf,sizeof buf,"Exam completed. Final score: %d/3\n",score); send_text(fd,buf);
+    snprintf(logbuf,sizeof logbuf,"exam completed username=%s score=%d/3",user,score); log_event(logbuf);
+done:
+    shutdown(fd,SHUT_RDWR); close(fd); return NULL;
+}
+int main(void) {
+    signal(SIGPIPE,SIG_IGN);
+    int s=socket(AF_INET,SOCK_STREAM,0); if(s<0){perror("socket");return 1;}
+    int yes=1; setsockopt(s,SOL_SOCKET,SO_REUSEADDR,&yes,sizeof yes);
+    struct sockaddr_in a={0}; a.sin_family=AF_INET; a.sin_addr.s_addr=INADDR_ANY; a.sin_port=htons(PORT);
+    if(bind(s,(struct sockaddr*)&a,sizeof a)<0||listen(s,BACKLOG)<0){perror("bind/listen");close(s);return 1;}
+    printf("Online Examination server listening on port %d\n",PORT);
+    for(;;){struct sockaddr_in peer; socklen_t len=sizeof peer; int c=accept(s,(struct sockaddr*)&peer,&len);
+        if(c<0){perror("accept");continue;}
+        int *p=malloc(sizeof *p); if(!p){close(c);continue;} *p=c;
+        pthread_t t; if(pthread_create(&t,NULL,handle_client,p)!=0){close(c);free(p);continue;} pthread_detach(t);
+    }
+}
