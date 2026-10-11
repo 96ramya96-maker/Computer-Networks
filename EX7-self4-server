@@ -1,0 +1,25 @@
+#define _POSIX_C_SOURCE 200809L
+#include <arpa/inet.h>
+#include <pthread.h>
+#include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <time.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#define PORT 5004
+#define MAX_CLIENTS 100
+#define BUF 1024
+typedef struct {int fd; int active; char name[64];} Client;
+static Client clients[MAX_CLIENTS];
+static pthread_mutex_t clients_mutex=PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t log_mutex=PTHREAD_MUTEX_INITIALIZER;
+static void log_event(const char*m){time_t now=time(NULL);pthread_mutex_lock(&log_mutex);FILE*f=fopen("chat.log","a");if(f){fprintf(f,"%ld %s\n",(long)now,m);fclose(f);}pthread_mutex_unlock(&log_mutex);}
+static int send_all(int fd,const char*m){size_t n=strlen(m);while(n){ssize_t r=send(fd,m,n,0);if(r<=0)return 0;m+=r;n-=r;}return 1;}
+static void broadcast(const char*m,int except){pthread_mutex_lock(&clients_mutex);for(int i=0;i<MAX_CLIENTS;i++)if(clients[i].active&&clients[i].fd!=except){if(!send_all(clients[i].fd,m)){shutdown(clients[i].fd,SHUT_RDWR);}}pthread_mutex_unlock(&clients_mutex);}
+static void remove_client(int fd){pthread_mutex_lock(&clients_mutex);for(int i=0;i<MAX_CLIENTS;i++)if(clients[i].active&&clients[i].fd==fd){clients[i].active=0;clients[i].fd=-1;break;}pthread_mutex_unlock(&clients_mutex);}
+static int recv_line(int fd,char*b,size_t z){size_t n=0;char c;while(n+1<z){ssize_t r=recv(fd,&c,1,0);if(r<=0)return 0;if(c=='\r')continue;if(c=='\n')break;b[n++]=c;}b[n]=0;return 1;}
+static void *client_thread(void*arg){int fd=*(int*)arg;free(arg);char name[64],line[BUF],msg[BUF+128];send_all(fd,"Enter your chat name: ");if(!recv_line(fd,name,sizeof name)||!name[0])strcpy(name,"Guest");int slot=-1;pthread_mutex_lock(&clients_mutex);for(int i=0;i<MAX_CLIENTS;i++)if(!clients[i].active){slot=i;clients[i].active=1;clients[i].fd=fd;strncpy(clients[i].name,name,sizeof clients[i].name-1);clients[i].name[sizeof clients[i].name-1]=0;break;}pthread_mutex_unlock(&clients_mutex);if(slot<0){send_all(fd,"Server full.\n");close(fd);return NULL;}snprintf(msg,sizeof msg,"*** %s joined the chat ***\n",name);broadcast(msg,fd);log_event(msg);send_all(fd,"Connected. Type messages; use /quit to leave.\n");while(recv_line(fd,line,sizeof line)){if(!strcmp(line,"/quit"))break;snprintf(msg,sizeof msg,"%s: %s\n",name,line);broadcast(msg,fd);send_all(fd,"Message sent.\n");log_event(msg);}remove_client(fd);snprintf(msg,sizeof msg,"*** %s left the chat ***\n",name);broadcast(msg,-1);log_event(msg);shutdown(fd,SHUT_RDWR);close(fd);return NULL;}
+int main(void){signal(SIGPIPE,SIG_IGN);for(int i=0;i<MAX_CLIENTS;i++)clients[i].fd=-1;int s=socket(AF_INET,SOCK_STREAM,0);if(s<0){perror("socket");return 1;}int yes=1;setsockopt(s,SOL_SOCKET,SO_REUSEADDR,&yes,sizeof yes);struct sockaddr_in a={0};a.sin_family=AF_INET;a.sin_addr.s_addr=INADDR_ANY;a.sin_port=htons(PORT);if(bind(s,(struct sockaddr*)&a,sizeof a)<0||listen(s,30)<0){perror("bind/listen");return 1;}printf("Chat server listening on port %d\n",PORT);for(;;){int c=accept(s,NULL,NULL);if(c<0)continue;int*p=malloc(sizeof*p);if(!p){close(c);continue;}*p=c;pthread_t t;if(pthread_create(&t,NULL,client_thread,p)==0)pthread_detach(t);else{free(p);close(c);}}}
