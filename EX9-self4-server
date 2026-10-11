@@ -1,0 +1,24 @@
+#include <arpa/inet.h>
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#define PORT 5104
+typedef struct {char reg[16],name[64],dept[16];int semester;float cgpa;} Student;
+static Student db[]={
+ {"23CS001","Arun Kumar","CSE",5,8.7},
+ {"23CS002","Priya","CSE",5,9.1},
+ {"23IT001","Kavin","IT",5,8.2}
+};
+int main(void){
+ int s=socket(AF_INET,SOCK_DGRAM,0);if(s<0){perror("socket");return 1;}
+ struct sockaddr_in a={0},peer;a.sin_family=AF_INET;a.sin_addr.s_addr=INADDR_ANY;a.sin_port=htons(PORT);
+ if(bind(s,(struct sockaddr*)&a,sizeof a)<0){perror("bind");return 1;}
+ printf("Student lookup server listening on port %d\n",PORT);
+ for(;;){char b[128],out[512];socklen_t len=sizeof peer;ssize_t n=recvfrom(s,b,sizeof b-1,0,(struct sockaddr*)&peer,&len);if(n<0)continue;b[n]=0;
+  if(strlen(b)>=sizeof db[0].reg){strcpy(out,"ERROR: invalid registration number");}
+  else {int found=0;for(size_t i=0;i<sizeof db/sizeof db[0];i++)if(!strcmp(b,db[i].reg)){snprintf(out,sizeof out,"Name: %s\nRegister No: %s\nDepartment: %s\nSemester: %d\nCGPA: %.2f",db[i].name,db[i].reg,db[i].dept,db[i].semester,db[i].cgpa);found=1;break;}if(!found)snprintf(out,sizeof out,"ERROR: student %s not found",b);}
+  sendto(s,out,strlen(out),0,(struct sockaddr*)&peer,len);
+ }
+}
