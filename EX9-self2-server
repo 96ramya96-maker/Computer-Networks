@@ -1,0 +1,36 @@
+#define _POSIX_C_SOURCE 200809L
+#include <arpa/inet.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#define PORT 5102
+#define MAX 512
+typedef struct {char location[64];double temp,humidity,pressure,wind;int count;int last_seq;} Station;
+static Station stations[100];static int sc=0;
+int main(void){
+ int s=socket(AF_INET,SOCK_DGRAM,0);if(s<0){perror("socket");return 1;}
+ struct sockaddr_in a={0},peer;a.sin_family=AF_INET;a.sin_addr.s_addr=INADDR_ANY;a.sin_port=htons(PORT);
+ if(bind(s,(struct sockaddr*)&a,sizeof a)<0){perror("bind");return 1;}
+ puts("Weather server listening on UDP port 5102");
+ for(;;){
+  char b[MAX],ack[128];socklen_t len=sizeof peer;ssize_t n=recvfrom(s,b,sizeof b-1,0,(struct sockaddr*)&peer,&len);if(n<0)continue;b[n]=0;
+  int seq;char loc[64];double t,h,p,w;
+  if(sscanf(b,"%d %63s %lf %lf %lf %lf",&seq,loc,&t,&h,&p,&w)!=6){snprintf(ack,sizeof ack,"ERROR invalid packet");sendto(s,ack,strlen(ack),0,(struct sockaddr*)&peer,len);continue;}
+  int i;for(i=0;i<sc;i++)if(!strcmp(stations[i].location,loc))break;
+  if(i==sc&&sc<100){strncpy(stations[sc].location,loc,63);stations[sc].count=0;stations[sc].last_seq=0;sc++;}
+  if(i==sc){strcpy(ack,"ERROR station limit reached");}
+  else if(seq<=stations[i].last_seq){snprintf(ack,sizeof ack,"ACK %d DUPLICATE",seq);}
+  else {
+   if(stations[i].last_seq&&seq>stations[i].last_seq+1)printf("Missing sequence(s) at %s: expected %d, got %d\n",loc,stations[i].last_seq+1,seq);
+   stations[i].last_seq=seq;stations[i].temp+=t;stations[i].humidity+=h;stations[i].pressure+=p;stations[i].wind+=w;stations[i].count++;
+   snprintf(ack,sizeof ack,"ACK %d OK",seq);
+   printf("\nLocation: %s, sequence: %d\nTemperature: %.1f C, Humidity: %.1f%%, Pressure: %.1f hPa, Wind: %.1f km/h\n",loc,seq,t,h,p,w);
+   printf("Averages for %s (%d readings): T=%.2f C, H=%.2f%%, P=%.2f hPa, W=%.2f km/h\n",loc,stations[i].count,stations[i].temp/stations[i].count,stations[i].humidity/stations[i].count,stations[i].pressure/stations[i].count,stations[i].wind/stations[i].count);
+  }
+  sendto(s,ack,strlen(ack),0,(struct sockaddr*)&peer,len);
+ }
+}
