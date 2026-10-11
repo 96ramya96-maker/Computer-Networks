@@ -1,0 +1,23 @@
+#define _POSIX_C_SOURCE 200809L
+#include <arpa/inet.h>
+#include <pthread.h>
+#include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <dirent.h>
+#include <sys/stat.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#define PORT 5003
+#define BUF 2048
+#define SHARE_DIR "shared_files"
+static pthread_mutex_t log_mutex=PTHREAD_MUTEX_INITIALIZER;
+static void log_event(const char*m){pthread_mutex_lock(&log_mutex);FILE*f=fopen("fileserver.log","a");if(f){fprintf(f,"%s\n",m);fclose(f);}pthread_mutex_unlock(&log_mutex);}
+static int send_all(int fd,const void*data,size_t len){const char*p=data;while(len){ssize_t n=send(fd,p,len,0);if(n<=0)return 0;p+=n;len-=n;}return 1;}
+static int recv_line(int fd,char*b,size_t z){size_t n=0;char c;while(n+1<z){ssize_t r=recv(fd,&c,1,0);if(r<=0)return 0;if(c=='\r')continue;if(c=='\n')break;b[n++]=c;}b[n]=0;return 1;}
+static int safe_name(const char*n){return n[0]&&strstr(n,"..")==NULL&&strchr(n,'/')==NULL&&strchr(n,'\\')==NULL;}
+static void list_files(int fd){DIR*d=opendir(SHARE_DIR);if(!d){send(fd,"Shared directory missing.\n",26,0);return;}send(fd,"Available files:\n",17,0);struct dirent*e;while((e=readdir(d))){if(e->d_name[0]=='.')continue;char path[512];struct stat st;snprintf(path,sizeof path,"%s/%s",SHARE_DIR,e->d_name);if(stat(path,&st)==0&&S_ISREG(st.st_mode)){char row[600];snprintf(row,sizeof row,"%s (%lld bytes)\n",e->d_name,(long long)st.st_size);send(fd,row,strlen(row),0);}}closedir(d);send(fd,"END\n",4,0);}
+static void *client_thread(void*arg){int fd=*(int*)arg;free(arg);char cmd[BUF],path[512],msg[600];send(fd,"FILE SHARING SERVER\nCommands: LIST | GET filename | QUIT\n",58,0);while(recv_line(fd,cmd,sizeof cmd)){if(!strcmp(cmd,"QUIT"))break;if(!strcmp(cmd,"LIST")){list_files(fd);continue;}if(!strncmp(cmd,"GET ",4)&&safe_name(cmd+4)){snprintf(path,sizeof path,"%s/%s",SHARE_DIR,cmd+4);FILE*f=fopen(path,"rb");if(!f){send(fd,"ERROR File not found.\n",22,0);continue;}struct stat st;if(stat(path,&st)<0){fclose(f);send(fd,"ERROR Cannot stat file.\n",24,0);continue;}snprintf(msg,sizeof msg,"SIZE %lld\n",(long long)st.st_size);send_all(fd,msg,strlen(msg));char b[4096];size_t n;while((n=fread(b,1,sizeof b,f))>0)if(!send_all(fd,b,n))break;fclose(f);send(fd,"\nEND_FILE\n",10,0);snprintf(msg,sizeof msg,"download requested: %s",cmd+4);log_event(msg);}else send(fd,"ERROR Use LIST, GET filename, or QUIT.\n",39,0);}close(fd);return NULL;}
+int main(void){signal(SIGPIPE,SIG_IGN);mkdir(SHARE_DIR,0755);int s=socket(AF_INET,SOCK_STREAM,0);if(s<0){perror("socket");return 1;}int yes=1;setsockopt(s,SOL_SOCKET,SO_REUSEADDR,&yes,sizeof yes);struct sockaddr_in a={0};a.sin_family=AF_INET;a.sin_addr.s_addr=INADDR_ANY;a.sin_port=htons(PORT);if(bind(s,(struct sockaddr*)&a,sizeof a)<0||listen(s,20)<0){perror("bind/listen");return 1;}printf("File server listening on port %d. Put files in ./%s/\n",PORT,SHARE_DIR);for(;;){int c=accept(s,NULL,NULL);if(c<0)continue;int*p=malloc(sizeof*p);if(!p){close(c);continue;}*p=c;pthread_t t;if(pthread_create(&t,NULL,client_thread,p)==0)pthread_detach(t);else{free(p);close(c);}}}
