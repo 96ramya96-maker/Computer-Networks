@@ -1,0 +1,369 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+
+#define PORT 8081
+#define GENERATOR "1101"
+#define DATA_SIZE 100
+#define CODE_SIZE 1000
+
+/* ---------- Packet ---------- */
+
+typedef struct
+{
+    int frameNo;
+    int totalFrames;
+    char data[DATA_SIZE];
+    char codeword[CODE_SIZE];
+} Packet;
+
+/* ---------- Circular Linked List ---------- */
+
+typedef struct Node
+{
+    int frameNo;
+    char data[DATA_SIZE];
+    int received;
+    struct Node *next;
+} Node;
+
+Node *head = NULL;
+Node *tail = NULL;
+
+/* ---------- Create CLL ---------- */
+
+void createFrameList(int totalFrames)
+{
+    int i;
+
+    for (i = 1; i <= totalFrames; i++)
+    {
+        Node *newNode = malloc(sizeof(Node));
+
+        newNode->frameNo = i;
+        newNode->data[0] = '\0';
+        newNode->received = 0;
+
+        if (head == NULL)
+        {
+            head = tail = newNode;
+            newNode->next = head;
+        }
+        else
+        {
+            newNode->next = head;
+            tail->next = newNode;
+            tail = newNode;
+        }
+    }
+}
+
+/* ---------- Find Frame ---------- */
+
+Node *findFrame(int frameNo)
+{
+    Node *current = head;
+
+    if (current == NULL)
+        return NULL;
+
+    do
+    {
+        if (current->frameNo == frameNo)
+            return current;
+
+        current = current->next;
+
+    } while (current != head);
+
+    return NULL;
+}
+
+/* ---------- Count Received ---------- */
+
+int countReceived(int totalFrames)
+{
+    Node *current = head;
+
+    int count = 0;
+    int i;
+
+    if (current == NULL)
+        return 0;
+
+    for (i = 0; i < totalFrames; i++)
+    {
+        if (current->received)
+            count++;
+
+        current = current->next;
+    }
+
+    return count;
+}
+
+/* ---------- XOR ---------- */
+
+void xorOperation(char a[], char b[], int start, int length)
+{
+    int i;
+
+    for (i = 0; i < length; i++)
+    {
+        if (a[start + i] == b[i])
+            a[start + i] = '0';
+        else
+            a[start + i] = '1';
+    }
+}
+
+/* ---------- CRC Checking ---------- */
+
+int checkCRC(char codeword[])
+{
+    char temp[CODE_SIZE];
+
+    int length = strlen(codeword);
+    int generatorLength = strlen(GENERATOR);
+
+    int i;
+
+    if (length < generatorLength)
+        return 0;
+
+    strcpy(temp, codeword);
+
+    for (i = 0;
+         i <= length - generatorLength;
+         i++)
+    {
+        if (temp[i] == '1')
+            xorOperation(temp,
+                         GENERATOR,
+                         i,
+                         generatorLength);
+    }
+
+    /*
+       If any remainder bit is 1,
+       CRC error exists.
+    */
+
+    for (i = length - generatorLength + 1;
+         i < length;
+         i++)
+    {
+        if (temp[i] == '1')
+            return 0;
+    }
+
+    return 1;
+}
+
+/* ---------- Create Socket ---------- */
+
+int createSocket()
+{
+    int sockfd;
+
+    sockfd = socket(AF_INET,
+                    SOCK_DGRAM,
+                    0);
+
+    if (sockfd < 0)
+    {
+        perror("Socket creation failed");
+        exit(1);
+    }
+
+    return sockfd;
+}
+
+/* ---------- Bind Server ---------- */
+
+void bindServer(int sockfd,
+                struct sockaddr_in *server)
+{
+    server->sin_family = AF_INET;
+    server->sin_port = htons(PORT);
+
+    server->sin_addr.s_addr = INADDR_ANY;
+
+    if (bind(sockfd,
+             (struct sockaddr *)server,
+             sizeof(*server)) < 0)
+    {
+        perror("Bind failed");
+        exit(1);
+    }
+}
+
+/* ---------- Receiver ---------- */
+
+void runReceiver()
+{
+    int sockfd;
+
+    struct sockaddr_in server;
+    struct sockaddr_in client;
+
+    socklen_t clientLength =
+        sizeof(client);
+
+    Packet packet;
+
+    int totalFrames = 0;
+
+    sockfd = createSocket();
+
+    bindServer(sockfd,
+               &server);
+
+    printf("\nSelective Repeat Receiver started...\n");
+    printf("Waiting for frames...\n");
+
+    while (1)
+    {
+        int bytes;
+
+        bytes = recvfrom(sockfd,
+                         &packet,
+                         sizeof(packet),
+                         0,
+                         (struct sockaddr *)&client,
+                         &clientLength);
+
+        if (bytes < 0)
+        {
+            perror("Receive failed");
+            continue;
+        }
+
+        if (bytes != sizeof(Packet))
+        {
+            printf("Invalid packet received.\n");
+            continue;
+        }
+
+        totalFrames = packet.totalFrames;
+
+        /*
+           Create the CLL only after the
+           first packet tells us totalFrames.
+        */
+
+        if (head == NULL)
+            createFrameList(totalFrames);
+
+        printf("\nReceived Frame %d\n",
+               packet.frameNo);
+
+        printf("Data     : %s\n",
+               packet.data);
+
+        printf("Codeword : %s\n",
+               packet.codeword);
+
+        /* ---------- CRC Check ---------- */
+
+        if (checkCRC(packet.codeword))
+        {
+            printf("CRC Check: PASSED\n");
+
+            Node *frame =
+                findFrame(packet.frameNo);
+
+            if (frame != NULL)
+            {
+                if (!frame->received)
+                {
+                    strcpy(frame->data,
+                           packet.data);
+
+                    frame->received = 1;
+
+                    printf("Frame %d stored.\n",
+                           packet.frameNo);
+                }
+                else
+                {
+                    /*
+                       Duplicate frame.
+                       Still send ACK because
+                       sender may not have received
+                       the previous ACK.
+                    */
+
+                    printf("Frame %d already received.\n",
+                           packet.frameNo);
+                }
+            }
+
+            char reply[30];
+
+            sprintf(reply,
+                    "ACK %d",
+                    packet.frameNo);
+
+            sendto(sockfd,
+                   reply,
+                   strlen(reply) + 1,
+                   0,
+                   (struct sockaddr *)&client,
+                   clientLength);
+
+            printf("ACK %d sent.\n",
+                   packet.frameNo);
+
+            /* ---------- All Frames? ---------- */
+
+            if (countReceived(totalFrames)
+                == totalFrames)
+            {
+                printf("\nAll %d frames received successfully.\n",
+                       totalFrames);
+
+                break;
+            }
+        }
+
+        /* ---------- CRC Error ---------- */
+
+        else
+        {
+            printf("CRC Check: FAILED\n");
+
+            printf("CRC Error detected in Frame %d\n",
+                   packet.frameNo);
+
+            char reply[30];
+
+            sprintf(reply,
+                    "NACK %d",
+                    packet.frameNo);
+
+            sendto(sockfd,
+                   reply,
+                   strlen(reply) + 1,
+                   0,
+                   (struct sockaddr *)&client,
+                   clientLength);
+
+            printf("NACK %d sent.\n",
+                   packet.frameNo);
+        }
+    }
+
+    close(sockfd);
+}
+
+/* ---------- Main ---------- */
+
+int main()
+{
+    runReceiver();
+
+    return 0;
+}
