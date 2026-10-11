@@ -1,0 +1,58 @@
+Q7 — Two VLANs: Sales VLAN 10 and HR VLAN 20
+Topology:
+R1 G0/0 <— trunk —> SW1 F0/1
+SW1 F0/2–F0/3: Sales PCs; SW1 F0/4–F0/5: HR PCs.
+Example subnets:
+VLAN 10: 192.168.10.0/24, gateway 192.168.10.1
+VLAN 20: 192.168.20.0/24, gateway 192.168.20.1
+
+SW1:
+enable
+configure terminal
+vlan 10
+ name SALES
+vlan 20
+ name HR
+interface range fastEthernet0/2-3
+ switchport mode access
+ switchport access vlan 10
+ spanning-tree portfast
+exit
+interface range fastEthernet0/4-5
+ switchport mode access
+ switchport access vlan 20
+ spanning-tree portfast
+exit
+interface fastEthernet0/1
+ switchport mode trunk
+ no shutdown
+end
+write memory
+
+R1 (router-on-a-stick; connect R1 G0/0 to SW1 F0/1):
+enable
+configure terminal
+interface gigabitEthernet0/0
+ no shutdown
+exit
+interface gigabitEthernet0/0.10
+ encapsulation dot1Q 10
+ ip address 192.168.10.1 255.255.255.0
+exit
+interface gigabitEthernet0/0.20
+ encapsulation dot1Q 20
+ ip address 192.168.20.1 255.255.255.0
+end
+write memory
+
+PC IP configuration (static example):
+Sales PC0: 192.168.10.10 /24, gateway 192.168.10.1
+Sales PC1: 192.168.10.11 /24, gateway 192.168.10.1
+HR PC0:    192.168.20.10 /24, gateway 192.168.20.1
+HR PC1:    192.168.20.11 /24, gateway 192.168.20.1
+
+Verify:
+show vlan brief
+show interfaces trunk
+show ip interface brief
+ping between PCs in same VLAN and across VLANs.
