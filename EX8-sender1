@@ -1,0 +1,268 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+
+#define PORT 8080
+#define BUFFER_SIZE 1024
+#define GENERATOR "1101"
+
+struct Node
+{
+    int frameNo;
+    char data[100];
+    struct Node *next;
+};
+
+struct Node *head = NULL;
+struct Node *tail = NULL;
+
+/* ---------- Circular Linked List ---------- */
+
+void addFrame(int frameNo, char data[])
+{
+    struct Node *newNode = malloc(sizeof(struct Node));
+
+    newNode->frameNo = frameNo;
+    strcpy(newNode->data, data);
+
+    if (head == NULL)
+    {
+        head = tail = newNode;
+        newNode->next = head;
+    }
+    else
+    {
+        newNode->next = head;
+        tail->next = newNode;
+        tail = newNode;
+    }
+}
+
+/* ---------- CRC Functions ---------- */
+
+void xorOperation(char a[], char b[], int start, int length)
+{
+    int i;
+
+    for (i = 0; i < length; i++)
+    {
+        a[start + i] = (a[start + i] == b[i]) ? '0' : '1';
+    }
+}
+
+void calculateCRC(char data[], char crc[])
+{
+    char temp[300];
+    char generator[] = GENERATOR;
+    int dataLength = strlen(data);
+    int generatorLength = strlen(generator);
+    int totalLength = dataLength + generatorLength - 1;
+    int i;
+
+    strcpy(temp, data);
+
+    for (i = dataLength; i < totalLength; i++)
+        temp[i] = '0';
+
+    temp[totalLength] = '\0';
+
+    for (i = 0; i <= totalLength - generatorLength; i++)
+    {
+        if (temp[i] == '1')
+            xorOperation(temp, generator, i, generatorLength);
+    }
+
+    strncpy(crc, temp + dataLength, generatorLength - 1);
+    crc[generatorLength - 1] = '\0';
+}
+
+void createCodeword(char data[], char codeword[])
+{
+    char crc[100];
+
+    calculateCRC(data, crc);
+
+    strcpy(codeword, data);
+    strcat(codeword, crc);
+}
+
+void introduceError(char codeword[])
+{
+    int position = 0;
+
+    printf("Enter bit position to introduce error (starting from 1): ");
+    scanf("%d", &position);
+
+    position--;
+
+    if (position >= 0 && position < strlen(codeword))
+    {
+        codeword[position] =
+            (codeword[position] == '0') ? '1' : '0';
+
+        printf("Error introduced at bit %d\n", position + 1);
+    }
+    else
+    {
+        printf("Invalid position. No error introduced.\n");
+    }
+}
+
+/* ---------- Socket Functions ---------- */
+
+int createSocket()
+{
+    int sockfd;
+
+    sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+
+    if (sockfd < 0)
+    {
+        perror("Socket creation failed");
+        exit(1);
+    }
+
+    return sockfd;
+}
+
+void setupServerAddress(struct sockaddr_in *server)
+{
+    server->sin_family = AF_INET;
+    server->sin_port = htons(PORT);
+    inet_pton(AF_INET, "127.0.0.1", &server->sin_addr);
+}
+
+/* ---------- Test Cases ---------- */
+
+void runStopAndWait(int choice)
+{
+    int sockfd;
+    struct sockaddr_in server;
+    socklen_t length = sizeof(server);
+
+    int n, i;
+    char data[100];
+    char codeword[300];
+    char reply[100];
+
+    sockfd = createSocket();
+    setupServerAddress(&server);
+
+    printf("\nEnter number of frames: ");
+    scanf("%d", &n);
+
+    for (i = 1; i <= n; i++)
+    {
+        printf("Enter data for Frame %d: ", i);
+        scanf(" %[^\n]", data);
+
+        addFrame(i, data);
+    }
+
+    struct Node *current = head;
+
+    for (i = 1; i <= n; i++)
+    {
+        createCodeword(current->data, codeword);
+
+        if (choice == 3 && i == 2)
+        {
+            printf("\nFrame 2 is LOST during first transmission.\n");
+        }
+        else
+        {
+            if (choice == 4 && i == 2)
+            {
+                int errorChoice;
+
+                printf("\nFrame 2 selected for CRC test.\n");
+                printf("1. Introduce error\n");
+                printf("2. Do not introduce error\n");
+                printf("Enter choice: ");
+                scanf("%d", &errorChoice);
+
+                if (errorChoice == 1)
+                    introduceError(codeword);
+            }
+
+            printf("\nSending Frame %d\n", i);
+            printf("Data      : %s\n", current->data);
+            printf("Codeword  : %s\n", codeword);
+
+            sendto(sockfd, codeword, strlen(codeword) + 1, 0,
+                   (struct sockaddr *)&server, length);
+        }
+
+        while (1)
+        {
+            struct timeval timeout;
+
+            timeout.tv_sec = 3;
+            timeout.tv_usec = 0;
+
+            setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO,
+                       &timeout, sizeof(timeout));
+
+            int bytes = recvfrom(sockfd, reply, sizeof(reply), 0,
+                                 (struct sockaddr *)&server, &length);
+
+            if (bytes < 0)
+            {
+                printf("Timeout! No ACK/NACK received.\n");
+                printf("Retransmitting Frame %d...\n", i);
+
+                createCodeword(current->data, codeword);
+
+                sendto(sockfd, codeword, strlen(codeword) + 1, 0,
+                       (struct sockaddr *)&server, length);
+
+                continue;
+            }
+
+            reply[bytes] = '\0';
+
+            if (strncmp(reply, "ACK", 3) == 0)
+            {
+                printf("%s\n", reply);
+                break;
+            }
+
+            if (strncmp(reply, "NACK", 4) == 0)
+            {
+                printf("%s\n", reply);
+                printf("CRC error detected. Retransmitting Frame %d...\n", i);
+
+                createCodeword(current->data, codeword);
+
+                sendto(sockfd, codeword, strlen(codeword) + 1, 0,
+                       (struct sockaddr *)&server, length);
+            }
+        }
+
+        current = current->next;
+    }
+
+    printf("\nAll frames transmitted successfully.\n");
+
+    close(sockfd);
+}
+
+int main()
+{
+    int choice;
+
+    printf("\n===== STOP AND WAIT =====\n");
+    printf("1. Normal Transmission\n");
+    printf("2. Sender Starts Before Receiver\n");
+    printf("3. Frame Loss\n");
+    printf("4. CRC Error\n");
+
+    printf("Enter choice: ");
+    scanf("%d", &choice);
+
+    runStopAndWait(choice);
+
+    return 0;
+}
