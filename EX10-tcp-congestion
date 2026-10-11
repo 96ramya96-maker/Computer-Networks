@@ -1,0 +1,126 @@
+#include "ns3/core-module.h"
+#include "ns3/network-module.h"
+#include "ns3/internet-module.h"
+#include "ns3/point-to-point-module.h"
+#include "ns3/applications-module.h"
+#include "ns3/flow-monitor-module.h"
+#include <fstream>
+#include <iostream>
+
+using namespace ns3;
+
+static std::ofstream cwndFile;
+
+static void CwndChange(uint32_t oldCwnd, uint32_t newCwnd)
+{
+    cwndFile << Simulator::Now().GetSeconds() << "\t" << newCwnd << std::endl;
+}
+
+int main(int argc, char *argv[])
+{
+    std::string tcpType = "TcpNewReno";
+    double simTime = 20.0;
+    std::string bottleneckRate = "2Mbps";
+    std::string bottleneckDelay = "20ms";
+    uint32_t queuePackets = 20;
+
+    CommandLine cmd(__FILE__);
+    cmd.AddValue("tcpType", "TCP variant: TcpNewReno or TcpCubic", tcpType);
+    cmd.AddValue("simTime", "Simulation time in seconds", simTime);
+    cmd.AddValue("bottleneckRate", "Bottleneck link data rate", bottleneckRate);
+    cmd.AddValue("bottleneckDelay", "Bottleneck link delay", bottleneckDelay);
+    cmd.AddValue("queuePackets", "Bottleneck queue size in packets", queuePackets);
+    cmd.Parse(argc, argv);
+
+    Config::SetDefault("ns3::TcpL4Protocol::SocketType",
+        TypeIdValue(TypeId::LookupByName("ns3::" + tcpType)));
+    Config::SetDefault("ns3::TcpSocket::SegmentSize", UintegerValue(1000));
+
+    NodeContainer nodes;
+    nodes.Create(3); // sender, router, receiver
+
+    PointToPointHelper access;
+    access.SetDeviceAttribute("DataRate", StringValue("10Mbps"));
+    access.SetChannelAttribute("Delay", StringValue("5ms"));
+
+    PointToPointHelper bottleneck;
+    bottleneck.SetDeviceAttribute("DataRate", StringValue(bottleneckRate));
+    bottleneck.SetChannelAttribute("Delay", StringValue(bottleneckDelay));
+    bottleneck.SetQueue("ns3::DropTailQueue<Packet>",
+        "MaxSize", StringValue(std::to_string(queuePackets) + "p"));
+
+    NetDeviceContainer dSenderRouter = access.Install(nodes.Get(0), nodes.Get(1));
+    NetDeviceContainer dRouterReceiver = bottleneck.Install(nodes.Get(1), nodes.Get(2));
+
+    InternetStackHelper internet;
+    internet.Install(nodes);
+
+    Ipv4AddressHelper ip;
+    ip.SetBase("10.1.1.0", "255.255.255.0");
+    Ipv4InterfaceContainer i1 = ip.Assign(dSenderRouter);
+    ip.SetBase("10.1.2.0", "255.255.255.0");
+    Ipv4InterfaceContainer i2 = ip.Assign(dRouterReceiver);
+    Ipv4GlobalRoutingHelper::PopulateRoutingTables();
+
+    uint16_t port = 50000;
+    PacketSinkHelper sink("ns3::TcpSocketFactory",
+        InetSocketAddress(Ipv4Address::GetAny(), port));
+    ApplicationContainer sinkApp = sink.Install(nodes.Get(2));
+    sinkApp.Start(Seconds(0.0));
+    sinkApp.Stop(Seconds(simTime));
+
+    BulkSendHelper source("ns3::TcpSocketFactory",
+        InetSocketAddress(i2.GetAddress(1), port));
+    source.SetAttribute("MaxBytes", UintegerValue(0));
+    source.SetAttribute("SendSize", UintegerValue(1000));
+    ApplicationContainer sourceApp = source.Install(nodes.Get(0));
+    sourceApp.Start(Seconds(1.0));
+    sourceApp.Stop(Seconds(simTime - 0.5));
+
+    cwndFile.open("cwnd-trace.txt");
+    cwndFile << "Time(s)\tCwnd(bytes)\n";
+
+    // Trace the sender's TCP congestion window.
+    Config::ConnectWithoutContext(
+        "/NodeList/0/$ns3::TcpL4Protocol/SocketList/0/CongestionWindow",
+        MakeCallback(&CwndChange));
+
+    FlowMonitorHelper flowHelper;
+    Ptr<FlowMonitor> monitor = flowHelper.InstallAll();
+
+    Simulator::Stop(Seconds(simTime));
+    Simulator::Run();
+
+    monitor->CheckForLostPackets();
+    Ptr<Ipv4FlowClassifier> classifier =
+        DynamicCast<Ipv4FlowClassifier>(flowHelper.GetClassifier());
+    auto stats = monitor->GetFlowStats();
+
+    std::cout << "\nTCP Congestion Control Results\n";
+    for (auto it = stats.begin(); it != stats.end(); ++it) {
+        Ipv4FlowClassifier::FiveTuple tuple = classifier->FindFlow(it->first);
+        if (tuple.destinationPort != port)
+            continue;
+
+        double duration = it->second.timeLastRxPacket.GetSeconds()
+                        - it->second.timeFirstTxPacket.GetSeconds();
+        double throughputMbps = duration > 0
+            ? it->second.rxBytes * 8.0 / duration / 1e6 : 0.0;
+        double avgDelayMs = it->second.rxPackets > 0
+            ? it->second.delaySum.GetMilliSeconds() / it->second.rxPackets : 0.0;
+        double lossRatio = (it->second.txPackets > 0)
+            ? 100.0 * it->second.lostPackets / it->second.txPackets : 0.0;
+
+        std::cout << "Transmitted packets: " << it->second.txPackets << "\n"
+                  << "Received packets: " << it->second.rxPackets << "\n"
+                  << "Lost packets: " << it->second.lostPackets << "\n"
+                  << "Packet loss ratio (%): " << lossRatio << "\n"
+                  << "Throughput (Mbps): " << throughputMbps << "\n"
+                  << "Average delay (ms): " << avgDelayMs << "\n";
+    }
+
+    monitor->SerializeToXmlFile("flowmon-results.xml", true, true);
+    Simulator::Destroy();
+    cwndFile.close();
+    return 0;
+}
