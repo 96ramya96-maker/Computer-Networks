@@ -1,0 +1,12 @@
+#include <arpa/inet.h>
+#include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#define PORT 5003
+static int read_line(int s,char*b,size_t z){size_t n=0;char c;while(n+1<z){ssize_t r=recv(s,&c,1,0);if(r<=0)return 0;if(c=='\r')continue;if(c=='\n')break;b[n++]=c;}b[n]=0;return 1;}
+static int read_exact(int s,FILE*out,long long n){char b[4096];while(n>0){size_t want=n>(long long)sizeof b?sizeof b:(size_t)n;ssize_t r=recv(s,b,want,0);if(r<=0)return 0;if(fwrite(b,1,(size_t)r,out)!=(size_t)r)return 0;n-=r;}return 1;}
+int main(void){int s=socket(AF_INET,SOCK_STREAM,0);if(s<0){perror("socket");return 1;}struct sockaddr_in a={0};a.sin_family=AF_INET;a.sin_port=htons(PORT);inet_pton(AF_INET,"127.0.0.1",&a.sin_addr);if(connect(s,(struct sockaddr*)&a,sizeof a)<0){perror("connect");return 1;}char line[512],response[512];if(read_line(s,response,sizeof response))puts(response);if(read_line(s,response,sizeof response))puts(response);while(1){printf("> ");if(!fgets(line,sizeof line,stdin))break;line[strcspn(line,"\r\n")]=0;char cmd[600];snprintf(cmd,sizeof cmd,"%s\n",line);send(s,cmd,strlen(cmd),0);if(!strcmp(line,"QUIT"))break;if(!strcmp(line,"LIST")){while(read_line(s,response,sizeof response)){if(!strcmp(response,"END"))break;puts(response);}continue;}if(!strncmp(line,"GET ",4)){if(!read_line(s,response,sizeof response))break;if(strncmp(response,"SIZE ",5)){puts(response);continue;}long long size=atoll(response+5);char name[256];snprintf(name,sizeof name,"%s",line+4);FILE*f=fopen(name,"wb");if(!f){perror("fopen");close(s);return 1;}if(!read_exact(s,f,size)){fclose(f);puts("Download interrupted.");break;}fclose(f);/* consume the server's trailing newline and marker */read_line(s,response,sizeof response);read_line(s,response,sizeof response);printf("Downloaded %s (%lld bytes).\n",name,size);continue;}if(read_line(s,response,sizeof response))puts(response);}close(s);return 0;}
