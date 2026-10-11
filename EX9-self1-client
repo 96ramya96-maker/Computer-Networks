@@ -1,0 +1,31 @@
+#include <arpa/inet.h>
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <netinet/in.h>
+#define PORT 5101
+#define MAX 1024
+int main(void) {
+    int s=socket(AF_INET,SOCK_DGRAM,0); if(s<0){perror("socket");return 1;}
+    struct timeval tv={2,0};setsockopt(s,SOL_SOCKET,SO_RCVTIMEO,&tv,sizeof tv);
+    struct sockaddr_in a={0};a.sin_family=AF_INET;a.sin_port=htons(PORT);inet_pton(AF_INET,"127.0.0.1",&a.sin_addr);
+    char cmd[700],packet[MAX],response[MAX];int req=1;
+    puts("Library commands: LIST | SEARCH keyword | BORROW id | RETURN id | QUIT");
+    while(1) {
+        printf("> ");if(!fgets(cmd,sizeof cmd,stdin))break;cmd[strcspn(cmd,"\r\n")]=0;
+        if(!strcmp(cmd,"QUIT"))break;
+        snprintf(packet,sizeof packet,"%d|%s",req++,cmd);
+        int ok=0;
+        for(int attempt=1;attempt<=3&&!ok;attempt++) {
+            sendto(s,packet,strlen(packet),0,(struct sockaddr*)&a,sizeof a);
+            struct sockaddr_in from;socklen_t fl=sizeof from;
+            ssize_t n=recvfrom(s,response,sizeof response-1,0,(struct sockaddr*)&from,&fl);
+            if(n>=0){response[n]=0;printf("%s\n",response);ok=1;}
+            else printf("Timeout; retrying request (%d/3)...\n",attempt);
+        }
+        if(!ok)puts("No response after 3 attempts.");
+    }
+    close(s);return 0;
+}
