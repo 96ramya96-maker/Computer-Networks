@@ -1,0 +1,22 @@
+#include <arpa/inet.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#define PORT 5103
+int main(void){
+ int s=socket(AF_INET,SOCK_DGRAM,0);if(s<0){perror("socket");return 1;}
+ struct sockaddr_in a={0},peer;a.sin_family=AF_INET;a.sin_addr.s_addr=INADDR_ANY;a.sin_port=htons(PORT);
+ if(bind(s,(struct sockaddr*)&a,sizeof a)<0){perror("bind");return 1;}
+ printf("UDP calculator server on port %d\n",PORT);
+ for(;;){char b[256],out[256];socklen_t len=sizeof peer;ssize_t n=recvfrom(s,b,sizeof b-1,0,(struct sockaddr*)&peer,&len);if(n<0)continue;b[n]=0;
+  if(!strcmp(b,"EXIT")){strcpy(out,"BYE");sendto(s,out,strlen(out),0,(struct sockaddr*)&peer,len);continue;}
+  double x,y,r;char op;
+  if(sscanf(b,"%lf %c %lf",&x,&op,&y)!=3)strcpy(out,"ERROR: use number operator number");
+  else if(op=='/'&&y==0)strcpy(out,"ERROR: division by zero");
+  else {switch(op){case '+':r=x+y;break;case '-':r=x-y;break;case '*':r=x*y;break;case '/':r=x/y;break;default:snprintf(out,sizeof out,"ERROR: invalid operator");goto reply;}snprintf(out,sizeof out,"Result = %.6g",r);}
+ reply: sendto(s,out,strlen(out),0,(struct sockaddr*)&peer,len);
+ }
+}
