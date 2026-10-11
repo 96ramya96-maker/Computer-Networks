@@ -1,0 +1,50 @@
+#define _POSIX_C_SOURCE 200809L
+#include <arpa/inet.h>
+#include <pthread.h>
+#include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#define PORT 5002
+#define BUF 2048
+#define ROOMS 10
+static pthread_mutex_t data_mutex=PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t log_mutex=PTHREAD_MUTEX_INITIALIZER;
+static char booked_by[ROOMS][100]; /* empty means available */
+static void log_request(const char *msg) {
+    time_t now=time(NULL); struct tm tmv; char stamp[64];
+    localtime_r(&now,&tmv); strftime(stamp,sizeof stamp,"%Y-%m-%d %H:%M:%S",&tmv);
+    pthread_mutex_lock(&log_mutex); FILE *f=fopen("hotel.log","a");
+    if(f){fprintf(f,"[%s] %s\n",stamp,msg);fclose(f);} pthread_mutex_unlock(&log_mutex);
+}
+static int send_text(int fd,const char*s){return send(fd,s,strlen(s),0)>=0;}
+static int recv_line(int fd,char*b,size_t z){size_t n=0;char c;while(n+1<z){ssize_t r=recv(fd,&c,1,0);if(r<=0)return 0;if(c=='\r')continue;if(c=='\n')break;b[n++]=c;}b[n]=0;return 1;}
+static void load_data(void){FILE*f=fopen("hotel_bookings.txt","r");if(!f)return;int room;char name[100];while(fscanf(f,"%d %99s",&room,name)==2)if(room>=1&&room<=ROOMS)strncpy(booked_by[room-1],name,99);fclose(f);}
+static void save_data(void){FILE*f=fopen("hotel_bookings.txt","w");if(!f)return;for(int i=0;i<ROOMS;i++)if(booked_by[i][0])fprintf(f,"%d %s\n",i+1,booked_by[i]);fclose(f);}
+static void *client_thread(void *arg){
+    int fd=*(int*)arg;free(arg);char line[BUF],out[BUF],name[100],logbuf[256];
+    send_text(fd,"HOTEL RESERVATION SYSTEM\nCommands: VIEW | BOOK room name | CANCEL room name | MY name | QUIT\n> ");
+    while(recv_line(fd,line,sizeof line)){
+        if(!strcasecmp(line,"QUIT"))break;
+        if(!strcasecmp(line,"VIEW")){
+            out[0]=0;pthread_mutex_lock(&data_mutex);
+            for(int i=0;i<ROOMS;i++){char row[160];snprintf(row,sizeof row,"Room %02d: %s%s\n",i+1,booked_by[i][0]?"BOOKED by ":"AVAILABLE",booked_by[i][0]?booked_by[i]:"");strncat(out,row,sizeof(out)-strlen(out)-1);}
+            pthread_mutex_unlock(&data_mutex);send_text(fd,out);
+        } else if(sscanf(line,"BOOK %d %99s",&(int){0},name)==2) {
+            int room; if(sscanf(line,"BOOK %d %99s",&room,name)!=2||room<1||room>ROOMS){send_text(fd,"Usage: BOOK room_number name (room 1-10)\n");}
+            else {pthread_mutex_lock(&data_mutex);if(booked_by[room-1][0])send_text(fd,"Room already booked.\n");else{strncpy(booked_by[room-1],name,99);save_data();send_text(fd,"Booking successful.\n");}pthread_mutex_unlock(&data_mutex);snprintf(logbuf,sizeof logbuf,"BOOK room=%d name=%s",room,name);log_request(logbuf);}
+        } else if(!strncmp(line,"CANCEL ",7)){
+            int room; if(sscanf(line,"CANCEL %d %99s",&room,name)!=2||room<1||room>ROOMS)send_text(fd,"Usage: CANCEL room_number name\n");
+            else{pthread_mutex_lock(&data_mutex);if(strcmp(booked_by[room-1],name)!=0)send_text(fd,"Cancellation denied: booking name does not match.\n");else{booked_by[room-1][0]=0;save_data();send_text(fd,"Booking cancelled.\n");}pthread_mutex_unlock(&data_mutex);snprintf(logbuf,sizeof logbuf,"CANCEL room=%d name=%s",room,name);log_request(logbuf);}
+        } else if(!strncmp(line,"MY ",3)){
+            snprintf(out,sizeof out,"Bookings for %s:\n",line+3);pthread_mutex_lock(&data_mutex);for(int i=0;i<ROOMS;i++)if(!strcmp(booked_by[i],line+3)){char row[32];snprintf(row,sizeof row,"Room %d\n",i+1);strncat(out,row,sizeof(out)-strlen(out)-1);}pthread_mutex_unlock(&data_mutex);send_text(fd,out);
+        } else send_text(fd,"Invalid command. Try VIEW, BOOK room name, CANCEL room name, MY name, or QUIT.\n");
+        send_text(fd,"> ");
+    }
+    log_request("client disconnected");close(fd);return NULL;
+}
+int main(void){signal(SIGPIPE,SIG_IGN);load_data();int s=socket(AF_INET,SOCK_STREAM,0);if(s<0){perror("socket");return 1;}int yes=1;setsockopt(s,SOL_SOCKET,SO_REUSEADDR,&yes,sizeof yes);struct sockaddr_in a={0};a.sin_family=AF_INET;a.sin_addr.s_addr=INADDR_ANY;a.sin_port=htons(PORT);if(bind(s,(struct sockaddr*)&a,sizeof a)<0||listen(s,20)<0){perror("bind/listen");return 1;}printf("Hotel server listening on port %d\n",PORT);for(;;){int c=accept(s,NULL,NULL);if(c<0)continue;int*p=malloc(sizeof*p);if(!p){close(c);continue;}*p=c;pthread_t t;if(pthread_create(&t,NULL,client_thread,p)==0)pthread_detach(t);else{free(p);close(c);}}}
