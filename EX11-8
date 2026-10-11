@@ -1,0 +1,55 @@
+Q8 — Three routers joined in a line using serial links, each router has a LAN.
+Topology:
+LAN1—R1 S0/0/0 — R2 S0/0/0; R2 S0/0/1 — R3 S0/0/0—LAN3.
+R2 also connects LAN2.
+Example networks:
+LAN1 192.168.1.0/24, R1 LAN .1
+LAN2 192.168.2.0/24, R2 LAN .1
+LAN3 192.168.3.0/24, R3 LAN .1
+R1-R2 serial: 10.0.12.0/30 (R1=10.0.12.1, R2=10.0.12.2)
+R2-R3 serial: 10.0.23.0/30 (R2=10.0.23.1, R3=10.0.23.2)
+
+Interface names can vary; substitute the actual serial/LAN ports.
+
+R1:
+conf t
+int g0/0
+ ip address 192.168.1.1 255.255.255.0
+ no shut
+int s0/0/0
+ ip address 10.0.12.1 255.255.255.252
+ no shut
+ip route 192.168.2.0 255.255.255.0 10.0.12.2
+ip route 192.168.3.0 255.255.255.0 10.0.12.2
+end
+
+R2:
+conf t
+int g0/0
+ ip address 192.168.2.1 255.255.255.0
+ no shut
+int s0/0/0
+ ip address 10.0.12.2 255.255.255.252
+ no shut
+int s0/0/1
+ ip address 10.0.23.1 255.255.255.252
+ no shut
+ip route 192.168.1.0 255.255.255.0 10.0.12.1
+ip route 192.168.3.0 255.255.255.0 10.0.23.2
+end
+
+R3:
+conf t
+int g0/0
+ ip address 192.168.3.1 255.255.255.0
+ no shut
+int s0/0/0
+ ip address 10.0.23.2 255.255.255.252
+ no shut
+ip route 192.168.1.0 255.255.255.0 10.0.23.1
+ip route 192.168.2.0 255.255.255.0 10.0.23.1
+end
+
+Set clock rate 64000 only on the DCE end of each serial link.
+Set each PC's IP/mask and default gateway to its LAN router IP.
+Verify: show ip route, show ip interface brief, ping remote PCs, tracert remote PC.
