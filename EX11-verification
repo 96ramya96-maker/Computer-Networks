@@ -1,0 +1,25 @@
+PC0, PC1, PC2 — Desktop > IP Configuration > DHCP.
+Expected addresses are in 192.168.10.10–192.168.10.50.
+Command Prompt:
+ipconfig /all
+ping 192.168.10.1
+ping 192.168.10.2
+
+Reconnect test:
+1. Set PC0 to DHCP.
+2. Disconnect and reconnect its switch cable (or disable/enable the interface).
+3. Click DHCP again if needed; verify with `ipconfig`.
+4. Ping 192.168.10.1 and 192.168.10.2.
+
+Router checks:
+show ip interface brief
+show ip dhcp binding
+show ip dhcp pool
+show ip nat translations
+show ip nat statistics
+
+Packet Tracer Simulation:
+1. Switch to Simulation mode.
+2. Filter for DHCP and ARP; use PC Desktop > IP Configuration > DHCP.
+3. Observe Discover, Offer, Request, ACK (DORA).
+4. For NAT, generate traffic from a PC to a simulated outside server; inspect the packet and `show ip nat translations`.
