@@ -1,0 +1,115 @@
+Q10 — Secure enterprise: VLANs, DHCP, DNS, NAT, ACLs and Port Security
+Example design:
+VLAN 10 STAFF: 192.168.10.0/24 gateway 192.168.10.1
+VLAN 20 HR:    192.168.20.0/24 gateway 192.168.20.1
+VLAN 30 GUEST: 192.168.30.0/24 gateway 192.168.30.1
+R1 G0/0 to SW1 trunk; R1 G0/1 to simulated ISP.
+Create VLANs and access ports on switch; trunk uplink to router.
+
+SW1:
+conf t
+vlan 10
+ name STAFF
+vlan 20
+ name HR
+vlan 30
+ name GUEST
+interface range fa0/2-5
+ switchport mode access
+ switchport access vlan 10
+ spanning-tree portfast
+ switchport port-security
+ switchport port-security maximum 2
+ switchport port-security mac-address sticky
+ switchport port-security violation restrict
+exit
+interface range fa0/6-8
+ switchport mode access
+ switchport access vlan 20
+ spanning-tree portfast
+ switchport port-security
+ switchport port-security maximum 2
+ switchport port-security mac-address sticky
+ switchport port-security violation restrict
+exit
+interface range fa0/9-10
+ switchport mode access
+ switchport access vlan 30
+ spanning-tree portfast
+ switchport port-security
+ switchport port-security maximum 2
+ switchport port-security mac-address sticky
+ switchport port-security violation restrict
+exit
+interface fa0/1
+ switchport mode trunk
+end
+wr
+
+R1 router-on-a-stick:
+conf t
+interface g0/0
+ no shut
+interface g0/0.10
+ encapsulation dot1Q 10
+ ip address 192.168.10.1 255.255.255.0
+ ip nat inside
+interface g0/0.20
+ encapsulation dot1Q 20
+ ip address 192.168.20.1 255.255.255.0
+ ip nat inside
+interface g0/0.30
+ encapsulation dot1Q 30
+ ip address 192.168.30.1 255.255.255.0
+ ip nat inside
+exit
+
+! DHCP pools (exclude gateway addresses)
+ip dhcp excluded-address 192.168.10.1 192.168.10.20
+ip dhcp excluded-address 192.168.20.1 192.168.20.20
+ip dhcp excluded-address 192.168.30.1 192.168.30.20
+ip dhcp pool STAFF
+ network 192.168.10.0 255.255.255.0
+ default-router 192.168.10.1
+ dns-server 8.8.8.8
+ip dhcp pool HR
+ network 192.168.20.0 255.255.255.0
+ default-router 192.168.20.1
+ dns-server 8.8.8.8
+ip dhcp pool GUEST
+ network 192.168.30.0 255.255.255.0
+ default-router 192.168.30.1
+ dns-server 8.8.8.8
+
+! Example ACL: deny Guest VLAN access to HR VLAN, permit other IP traffic
+ip access-list extended GUEST-FILTER
+ deny ip 192.168.30.0 0.0.0.255 192.168.20.0 0.0.0.255
+ permit ip 192.168.30.0 0.0.0.255 any
+exit
+interface g0/0.30
+ ip access-group GUEST-FILTER in
+exit
+
+! NAT/PAT: configure G0/1 based on ISP router addressing
+interface g0/1
+ ip address 203.0.113.2 255.255.255.252
+ ip nat outside
+ no shut
+exit
+access-list 1 permit 192.168.10.0 0.0.0.255
+access-list 1 permit 192.168.20.0 0.0.0.255
+access-list 1 permit 192.168.30.0 0.0.0.255
+ip nat inside source list 1 interface g0/1 overload
+ip route 0.0.0.0 0.0.0.0 203.0.113.1
+end
+wr
+
+IMPORTANT:
+- Adjust interface names to your router/switch model.
+- For a simulated Internet, connect an ISP router to R1 G0/1 and configure the ISP interface as 203.0.113.1/30; add an outside server/network and appropriate return routes.
+- ACL above only blocks Guest-to-HR; create additional ACL entries to match your teacher's exact security policy.
+- On the switch, port security requires access mode and supported switch ports. Verify with `show port-security interface fa0/2`.
+- Verify VLANs: show vlan brief, show interfaces trunk.
+- Verify DHCP: show ip dhcp binding.
+- Verify NAT: show ip nat translations, show ip nat statistics.
+- Test ping within VLANs, between VLANs, and from guest to HR (which should fail).
