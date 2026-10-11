@@ -1,0 +1,89 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+
+#define PORT 8891
+#define SERVER_IP "127.0.0.1"
+#define MAX_OPERANDS 10
+
+typedef struct {
+    char operator_str[16];
+    int operands[MAX_OPERANDS];
+    int num_operands;
+} RPCRequest;
+
+typedef struct {
+    int result;
+    char timestamp[32];
+    int status;
+} RPCResponse;
+
+int main() {
+    int sockfd;
+    struct sockaddr_in server_addr;
+    RPCRequest req;
+    RPCResponse res;
+    socklen_t addr_len = sizeof(server_addr);
+    int i; // Declared here for ANSI C / C89 compatibility
+
+    if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
+        perror("Socket creation failed");
+        exit(EXIT_FAILURE);
+    }
+
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(PORT);
+    inet_pton(AF_INET, SERVER_IP, &server_addr.sin_addr);
+
+    printf("--- UDP RPC Client ---\n");
+    printf("Enter operator (add, sub, mul, div): ");
+    scanf("%15s", req.operator_str);
+
+    printf("Enter number of operands : ");
+    scanf("%d", &req.num_operands);
+
+    if (req.num_operands > MAX_OPERANDS || req.num_operands < 1) {
+        printf("Invalid number of operands.\n");
+        close(sockfd);
+        return -1;
+    }
+
+    for (i = 0; i < req.num_operands; i++) {
+        printf("Enter operand %d: ", i + 1);
+        scanf("%d", &req.operands[i]);
+    }
+
+    printf("\nSending request to server...\n");
+    sendto(sockfd, &req, sizeof(req), 0, (struct sockaddr*)&server_addr, addr_len);
+
+    printf("Waiting for response (simulated 2s latency)...\n");
+    ssize_t n = recvfrom(sockfd, &res, sizeof(res), 0, (struct sockaddr*)&server_addr, &addr_len);
+
+    if (n < 0) {
+        perror("Error receiving response");
+    } else {
+        printf("\n--- Server Response ---\n");
+        printf("Timestamp: %s\n", res.timestamp);
+        if (res.status == 0) {
+            printf("Success! Result = %d\n", res.result);
+        } else if (res.status == -1) {
+            printf("Error: Invalid operation code.\n");
+        } else if (res.status == -2) {
+            printf("Error: Division by zero.\n");
+        } else if (res.status == -3) {
+            printf("Error: Insufficient parameters.\n");
+        } else if (res.status == -4) {
+            printf("Error: Division strictly requires exactly 2 parameters.\n");
+        } else {
+            printf("Error: Unknown status code %d\n", res.status);
+        }
+    }
+
+    close(sockfd);
+    return 0;
+}
