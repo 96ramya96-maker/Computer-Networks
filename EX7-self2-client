@@ -1,0 +1,8 @@
+#include <arpa/inet.h>
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#define PORT 5002
+int main(void){int s=socket(AF_INET,SOCK_STREAM,0);if(s<0){perror("socket");return 1;}struct sockaddr_in a={0};a.sin_family=AF_INET;a.sin_port=htons(PORT);inet_pton(AF_INET,"127.0.0.1",&a.sin_addr);if(connect(s,(struct sockaddr*)&a,sizeof a)<0){perror("connect");return 1;}char buf[4096],line[512];ssize_t n=recv(s,buf,sizeof(buf)-1,0);if(n>0){buf[n]=0;fputs(buf,stdout);}while(fgets(line,sizeof line,stdin)){send(s,line,strlen(line),0);if(!strncmp(line,"QUIT",4))break;n=recv(s,buf,sizeof(buf)-1,0);if(n<=0)break;buf[n]=0;fputs(buf,stdout);}close(s);return 0;}
